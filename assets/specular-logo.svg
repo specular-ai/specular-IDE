@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <title>Specular — connected prism</title>
+  <desc>A mint diamond with a faceted interior and an angular S linking two specification nodes.</desc>
+  <defs>
+    <linearGradient id="edge" x1="16" y1="12" x2="48" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C1F4E5"/>
+      <stop offset=".5" stop-color="#8BD5CC"/>
+      <stop offset="1" stop-color="#58AFC1"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#12161C"/>
+  <path d="M32 8 52 32 32 56 12 32Z" fill="#8BD5CC" fill-opacity=".04"/>
+  <path d="M32 8 52 32 32 56V8Z" fill="#8BD5CC" fill-opacity=".09"/>
+  <path d="M32 8 52 32 32 56 12 32Z" stroke="url(#edge)" stroke-width="2.8" stroke-linejoin="round"/>
+  <path d="M32 8V16M32 48V56" stroke="#8BD5CC" stroke-opacity=".45" stroke-width="1.5"/>
+  <path d="M39 23H29L22 32H42L35 41H25" stroke="url(#edge)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="39" cy="23" r="2.5" fill="#C1F4E5"/>
+  <circle cx="25" cy="41" r="2.5" fill="#8BD5CC"/>
+</svg>

@@ -1,0 +1,15 @@
+{
+  "manifestVersion": 1,
+  "id": "specular.relationships",
+  "title": "Relationships",
+  "version": "2.1.0",
+  "api": ">=0.2.0 <0.3.0",
+  "customApi": 1,
+  "entry": "dist/index.js",
+  "capabilities": ["workspace.read", "source.navigate"],
+  "models": ["project@1", "physical@1"],
+  "views": [
+    { "id": "focus", "title": "Focus", "kind": "custom" },
+    { "id": "overview", "title": "Overview", "kind": "custom" }
+  ]
+}

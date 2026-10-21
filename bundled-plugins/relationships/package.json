@@ -1,0 +1,8 @@
+{
+  "name": "specular-bundled-relationships",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "tsc --noEmit && node build.mjs", "validate": "specular-plugin-validate ." },
+  "devDependencies": { "@specular/plugin-api": "file:../../.cache/plugin-sdk/specular-plugin-api-0.2.0.tgz", "typescript": "7.0.2", "esbuild": "0.28.2" }
+}

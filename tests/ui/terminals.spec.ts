@@ -1,0 +1,136 @@
+import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+let application: ElectronApplication; let page: Page;
+test.afterEach(async () => { if (application) { await application.evaluate(({ BrowserWindow }) => { for (const w of BrowserWindow.getAllWindows()) w.destroy(); }).catch(() => {}); await application.close().catch(() => {}); } });
+test('terminal tabs run shell commands, preserve output while hidden, launch native agent commands and close cleanly', async () => {
+  const base = path.resolve('.cache/ui-tests'); await mkdir(base, { recursive: true }); const root = await mkdtemp(path.join(base, 'terminal-'));
+  const project = path.join(root, 'Project ñ space'); await mkdir(project); await writeFile(path.join(project, 'requirements.md'), '# Terminal test\n');
+  const agent = path.join(root, 'codex & fixture.cmd');
+  await writeFile(agent, '@echo off\r\nif "%~1"=="--version" (\r\necho codex-cli 0.154.0\r\nexit /b 0\r\n)\r\necho NATIVE-AGENT-READY\r\nset /p input=\r\necho %input%> native-command.txt\r\n');
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && key !== 'ELECTRON_RUN_AS_NODE')) as Record<string, string>;
+  application = await electron.launch({ args: ['.', `--project=${project}`], env: { ...env, SPECULAR_USER_DATA: path.join(root, 'user-data') } });
+  page = await application.firstWindow(); await expect(page.locator('#workspace')).toBeVisible();
+  await page.locator('#show-agent-setup').click(); await page.locator('#codex-path').fill(agent); await page.locator('#agent-setup-close').click();
+  await page.locator('#show-terminals').click(); await page.locator('[data-terminal-kind="powershell"]').click();
+  await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(1); await expect(page.locator('#terminal-scope')).toContainText(project);
+  await page.locator('.terminal-host:not([hidden]) .xterm-helper-textarea').pressSequentially("Set-Content -LiteralPath './from-terminal.md' -Value '# Terminal wrote this'");
+  await page.keyboard.press('Enter'); await expect.poll(async () => readFile(path.join(project, 'from-terminal.md'), 'utf8').catch(() => '')).toContain('Terminal wrote this');
+  await page.locator('#terminal-hide').click(); await page.locator('#show-terminals').click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(1);
+  await page.locator('[data-terminal-kind="codex"]').click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(2);
+  await expect(page.locator('.terminal-host:not([hidden])')).toContainText('NATIVE-AGENT-READY');
+  await page.locator('.terminal-host:not([hidden]) .xterm-helper-textarea').pressSequentially('/status'); await page.keyboard.press('Enter');
+  await expect.poll(async () => readFile(path.join(project, 'native-command.txt'), 'utf8').catch(() => '')).toContain('/status');
+  await expect(page.locator('#terminal-scope')).toContainText('exited'); await page.locator('#terminal-close').click();
+  await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(1);
+  await page.screenshot({ path: 'test-results/terminal.png' });
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); });
+  await page.locator('#terminal-close').click(); await expect(page.locator('#terminal-notice')).toContainText('kept open');
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+  await page.locator('#terminal-close').click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(0);
+  await page.locator('[data-terminal-kind="powershell"]').click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(1);
+  await page.locator('#terminal-hide').click();
+  const other = path.join(root, 'Other project'); await mkdir(other);
+  await application.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other);
+  await page.locator('#open-project').click(); await expect(page.locator('#project-heading')).toContainText('Other project');
+  await page.locator('#show-terminals').click(); await expect(page.locator('#terminal-scope')).toContainText(project);
+  await page.locator('[data-terminal-kind="cmd"]').click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(2); await expect(page.locator('#terminal-scope')).toContainText(other);
+  await page.locator('.terminal-host:not([hidden]) .xterm-helper-textarea').pressSequentially('powershell.exe -NoProfile -Command "[IO.File]::WriteAllText(\'child-pid.txt\',[string]$PID); Start-Sleep 60"'); await page.keyboard.press('Enter');
+  await expect.poll(async () => readFile(path.join(other, 'child-pid.txt'), 'utf8').catch(() => '')).not.toBe('');
+  const child = Number(await readFile(path.join(other, 'child-pid.txt'), 'utf8'));
+  await application.evaluate(({ BrowserWindow, dialog }) => { dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false }); BrowserWindow.getAllWindows()[0].close(); });
+  await expect(page.locator('#terminal-panel')).toBeVisible();
+  const closed = application.waitForEvent('close');
+  await application.evaluate(({ BrowserWindow, dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); BrowserWindow.getAllWindows()[0].close(); });
+  await closed; expect(() => process.kill(child, 0)).toThrow();
+});
+
+test('docked terminals keep the shell and editor usable through resizing, hiding and maximizing', async () => {
+  const base = path.resolve('.cache/ui-tests'); await mkdir(base, { recursive: true });
+  const root = await mkdtemp(path.join(base, 'terminal-dock-')); const project = path.join(root, 'project');
+  await mkdir(project); await writeFile(path.join(project, 'requirements.md'), '# Dock test\n');
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && key !== 'ELECTRON_RUN_AS_NODE')) as Record<string, string>;
+  application = await electron.launch({ args: ['.', `--project=${project}`], env: { ...env, SPECULAR_USER_DATA: path.join(root, 'user-data') } });
+  page = await application.firstWindow(); await expect(page.locator('#workspace')).toBeVisible();
+  await page.locator('#files .file-row').filter({ hasText: 'requirements.md' }).click();
+  await page.locator('#show-terminals').click();
+  const panel = page.locator('#terminal-panel'), divider = page.locator('#terminal-divider');
+  await expect(panel).toBeVisible(); await expect(page.locator('dialog[open]')).toHaveCount(0);
+  await expect(page.locator('#show-terminals')).toHaveAttribute('aria-expanded', 'true');
+  await page.locator('[data-terminal-kind="powershell"]').click();
+  const input = page.locator('.terminal-host:not([hidden]) .xterm-helper-textarea');
+  const command = async (text: string) => { await input.pressSequentially(text); await input.press('Enter'); };
+  await command("Set-Content -LiteralPath './pid.txt' -Value $PID");
+  await expect.poll(async () => readFile(path.join(project, 'pid.txt'), 'utf8').catch(() => '')).not.toBe('');
+  const pid = Number(await readFile(path.join(project, 'pid.txt'), 'utf8'));
+  const session = await page.locator('.terminal-host').getAttribute('data-terminal-id');
+  // Editing is possible without hiding the running terminal.
+  const editor = page.locator('#editor .cm-content'); await editor.fill('# Edited beside a running shell');
+  await page.locator('.cm-content').press('Control+s');
+  await expect.poll(() => readFile(path.join(project, 'requirements.md'), 'utf8')).toContain('Edited beside');
+  await expect(panel).toBeVisible(); expect(() => process.kill(pid, 0)).not.toThrow();
+  // Resize with pointer and keyboard, then restore the exact dock height.
+  const initial = (await panel.boundingBox())!.height; const handle = (await divider.boundingBox())!;
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 4); await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2, handle.y - 46); await page.mouse.up();
+  await expect.poll(async () => (await panel.boundingBox())!.height).toBeCloseTo(initial + 50, 0);
+  await divider.press('ArrowDown'); const height = (await panel.boundingBox())!.height;
+  expect(height).toBeCloseTo(initial + 25, 0);
+  await page.locator('#terminal-maximize').click(); await expect(page.locator('#workbench')).toBeHidden();
+  await expect(page.locator('#terminal-maximize')).toHaveText('Restore');
+  await page.locator('#terminal-maximize').click(); await expect(page.locator('#workbench')).toBeVisible();
+  expect((await panel.boundingBox())!.height).toBeCloseTo(height, 0);
+  // Hiding while maximized still restores the editor; showing retains maximize state.
+  await page.locator('#terminal-maximize').click(); await page.locator('#terminal-hide').click();
+  await expect(editor).toBeFocused(); await expect(page.locator('#workbench')).toBeVisible();
+  await page.locator('#show-terminals').click(); await expect(page.locator('#terminal-maximize')).toHaveText('Restore');
+  await page.locator('#terminal-maximize').click();
+  await command("Start-Sleep -Milliseconds 800; Write-Output ('HIDDEN' + '-OUTPUT'); Set-Content './hidden-done.txt' 'done'");
+  await page.locator('#terminal-hide').click(); await expect(editor).toBeFocused();
+  await expect.poll(async () => readFile(path.join(project, 'hidden-done.txt'), 'utf8').catch(() => '')).toContain('done');
+  await page.locator('#show-terminals').click();
+  await expect(page.locator('.terminal-host')).toContainText('HIDDEN-OUTPUT');
+  await expect(page.locator('.terminal-host')).toHaveAttribute('data-terminal-id', session!);
+  // An unfinished shell command also survives the keyboard toggle.
+  await input.pressSequentially("Write-Output ('PRESERVED' + '-INPUT')");
+  await page.keyboard.press('Control+Shift+T'); await expect(panel).toBeHidden(); await expect(editor).toBeFocused();
+  await page.keyboard.press('Control+Shift+T'); await expect(panel).toBeVisible(); await expect(input).toBeFocused();
+  await input.press('Enter'); await expect(page.locator('.terminal-host')).toContainText('PRESERVED-INPUT');
+  await command('Start-Sleep -Seconds 60'); await input.press('Control+c'); await input.press('Escape');
+  await expect(panel).toBeVisible();
+  await command("Set-Content -LiteralPath './pid-after.txt' -Value $PID");
+  await expect.poll(async () => Number(await readFile(path.join(project, 'pid-after.txt'), 'utf8').catch(() => '0'))).toBe(pid);
+  // At the minimum supported window size both surfaces stay within the window.
+  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(980, 680); });
+  await divider.press('End');
+  await expect.poll(async () => (await page.locator('#workbench').boundingBox())!.height).toBeGreaterThanOrEqual(199);
+  await divider.press('Home'); expect((await panel.boundingBox())!.height).toBeGreaterThanOrEqual(220);
+  const content = (await page.locator('#terminal-content').boundingBox())!;
+  expect(content.height).toBeGreaterThan(50);
+  expect(content.y + content.height).toBeLessThanOrEqual((await panel.boundingBox())!.y + (await panel.boundingBox())!.height);
+  await page.screenshot({ path: 'test-results/terminal-dock-small.png' });
+  await application.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].setSize(1480, 940); });
+  await divider.press('Enter');
+  await page.screenshot({ path: 'test-results/terminal-dock.png' });
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+  await page.locator('#terminal-close').click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(0);
+  expect(() => process.kill(pid, 0)).toThrow();
+});
+
+test('installed Codex and Claude open native terminal interfaces without model requests', async () => {
+  test.skip(!process.env.SPECULAR_LIVE_TERMINALS, 'Opt in to launching installed agent interfaces in disposable homes.');
+  test.setTimeout(90_000);
+  const base = path.resolve('.cache/ui-tests'); await mkdir(base, { recursive: true }); const root = await mkdtemp(path.join(base, 'native-terminals-'));
+  const project = path.join(root, 'project'); const home = path.join(root, 'home');
+  for (const dir of [project, home, path.join(home, 'tmp'), path.join(home, 'roaming'), path.join(home, 'local')]) await mkdir(dir, { recursive: true });
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && !/KEY|TOKEN|SECRET|ELECTRON_RUN_AS_NODE/i.test(key))) as Record<string, string>;
+  application = await electron.launch({ args: ['.', `--project=${project}`], env: { ...env, SPECULAR_USER_DATA: path.join(root, 'user-data'), HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, '.codex'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'), APPDATA: path.join(home, 'roaming'), LOCALAPPDATA: path.join(home, 'local'), TEMP: path.join(home, 'tmp'), TMP: path.join(home, 'tmp') } });
+  page = await application.firstWindow(); await expect(page.locator('#workspace')).toBeVisible(); await page.locator('#show-terminals').click();
+  await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
+  for (const kind of ['codex', 'claude']) {
+    await page.locator(`[data-terminal-kind="${kind}"]`).click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(1, { timeout: 20_000 });
+    await expect(page.locator('.terminal-host:not([hidden])')).toContainText(kind === 'codex' ? /Codex|Sign in|trust/i : /Claude|theme|Welcome/i, { timeout: 25_000 });
+    await page.screenshot({ path: `test-results/terminal-${kind}-live.png` });
+    await page.locator('#terminal-close').click(); await expect(page.locator('#terminal-tabs [role="tab"]')).toHaveCount(0, { timeout: 15_000 });
+  }
+});

@@ -1,0 +1,7 @@
+# Custom definition browser example
+
+This example follows the public appearance contract: the host supplies optional `request.appearance`, sets `data-theme` on the isolated document, and installs semantic `--specular-*` CSS variables before activation/update. Light-mode styles consume that palette; dark fallbacks preserve compatibility with older hosts. Theme-only updates preserve the filter and existing result DOM. Verify activation and live switching in both modes, including filtered source navigation, without importing core theme code.
+
+Since increment 77 each row also shows the ID's authored status from `project@1` (`ids[].status`), marked with the configured status colour for the current theme, or a conflict when written statuses disagree. This independently built increment 32 example owns an interactive DOM inside Specular's isolated custom-view surface. It filters current definitions, refreshes from unsaved editor text through the declared `project@1` model, and requests version-checked source navigation through the public API. It has no access to Specular's DOM, preload bridge, Node.js, filesystem, processes, credentials, or network.
+
+Build the local SDK first with `npm.cmd run sdk:pack`, install the resulting tarball in this directory, then run `npm.cmd run build` and `npm.cmd run validate`. In Specular, choose **Project Lens > Open plugin view...** and select this directory. Persistent installation remains increment 33.

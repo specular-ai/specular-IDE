@@ -1,0 +1,24 @@
+{
+  "name": "@specular/plugin-api",
+  "version": "0.2.0",
+  "description": "Public read-only abstraction plugin contract for Specular",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "specular-plugin-validate": "./bin/validate.mjs"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "private": true
+}

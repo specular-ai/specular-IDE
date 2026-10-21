@@ -1,0 +1,10 @@
+{
+  "manifestVersion": 1,
+  "id": "example.document-headings",
+  "version": "0.2.0",
+  "api": ">=0.2.0 <0.3.0",
+  "entry": "dist/index.js",
+  "capabilities": ["workspace.read", "source.navigate"],
+  "models": ["physical@1"],
+  "views": [{ "id": "headings", "title": "Document headings", "kind": "list" }]
+}

@@ -1,0 +1,13 @@
+# Bundled Relationships
+
+Since increment 78 (2.1.0) the plugin takes its links from the project model's `relationships` and `unownedMentions` instead of deriving them from section ownership. Focus's role pairing, Overview's graph indexes, path tracing, filters, and paging remain plugin logic over those links.
+
+Focus and Dependency overview run as two custom contributions in one isolated package. The implementation uses only the public SDK's `project@1` and `physical@1` models, source evidence, and custom API version 1 session state. Its local graph model preserves authored directions, repeated evidence, TASK paths, isolated/self-linked/missing/duplicate endpoints, full graph membership, filters, camera state, and recorded-path traversal.
+
+Build independently by installing a locally packed `@specular/plugin-api`, TypeScript, and esbuild, then running `npm run build` and `npm run validate`. `npm run test:sdk` in Specular copies this project to a temporary directory, installs only the packed SDK, checks its types, bundles it, and validates the result without importing Specular source. The application build includes the resulting package under `dist/bundled-plugins/relationships` for development and packaged execution.
+
+State belongs to the current project session. It survives source return and closing/reopening a view, but is discarded on project changes or app exit. Source buttons always use current project/revision-bound evidence. All occurrences can be inspected inside either mode using the same public project model.
+
+Configured categories now drive Focus eligibility and columns: requirement/design and design/task pairs retain explicit direction and source evidence. Second-hop paths expand only unique design definitions. Prefix spelling does not determine a supplied category's role; role-free categories remain in Overview, grouped by category key with display-name filters. Exact case is preserved in the Focus picker. On older hosts without category metadata the legacy REQ/DD/TASK roles remain available. Optional configuration revision metadata is retained, while source navigation remains bound to the ordinary request revision. Role changes refresh open views and invalidate previously captured source actions.
+
+The Focus ID picker uses an explicit searchable dropdown. Click the field or Show IDs to browse again after Explore; typing filters IDs and labels. Arrow keys and Enter select a suggestion, then Explore (or Enter again) opens it. Escape, Tab, and outside clicks dismiss the list. Long lists show the first 200 matches with a prompt to narrow the search; entering an arbitrary ID remains supported.
