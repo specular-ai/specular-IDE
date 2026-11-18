@@ -1,0 +1,110 @@
+{
+  "schema": 1,
+  "id": "kiro",
+  "tool": "Kiro",
+  "versions": "Kiro spec templates: requirements.md with numbered acceptance criteria, bugfix.md with behaviour sections (2025-2026)",
+  "description": "Acceptance criteria numbered by their position inside numbered requirements, bugfix criteria numbered N.M under the behaviour headings, and their citations in tasks and properties; tasks numbered 1 and 1.1 in the checkbox items of each spec's tasks.md, with their checkbox statuses.",
+  "applies": { "folders": "**/.kiro/specs/*" },
+  "detectors": [
+    {
+      "id": "acceptance-criteria",
+      "kind": "list-section",
+      "heading": "Acceptance Criteria",
+      "within": "numbered-keyword",
+      "min": 3,
+      "citations": "(?<![\\p{L}\\p{N}]){{keyword}}s?:[ \\t]*\\d+\\.\\d+|\\bValidates:?\\s+{{keyword}}s?:?[ \\t]*\\d+\\.\\d+"
+    },
+    {
+      "id": "bugfix-criteria",
+      "kind": "paragraph-sections",
+      "line": "^(\\d+\\.\\d+)(?=\\s)",
+      "sections": {
+        "defect": "Current Behavior (Defect)",
+        "expected": "Expected Behavior (Correct)",
+        "unchanged": "Unchanged Behavior (Regression Prevention)"
+      },
+      "min": 3
+    },
+    {
+      "id": "tasks",
+      "kind": "matching-lines",
+      "files": ["**/.kiro/specs/**/tasks.md"],
+      "pattern": "^(\\d+(?:\\.\\d+)?)(?=\\.?\\s)",
+      "checkboxOnly": true,
+      "min": 3
+    }
+  ],
+  "proposals": [
+    {
+      "detector": "acceptance-criteria",
+      "key": "{{parent}}-criteria",
+      "name": "Acceptance criterion",
+      "numberedItems": { "id": "Criterion {parent}.{item}" },
+      "scope": "parent",
+      "references": [
+        { "key": "{{self}}-citations", "category": "self", "when": "citations", "list": { "label": "\\b{{keywordPattern}}s?:|\\bValidates:?\\s+{{keywordPattern}}s?:?", "item": "(?<number>\\d+)\\.(?<criterion>\\d+)", "id": "Criterion {number}.{criterion}" } },
+        { "key": "{{parent}}-citations", "category": "parent", "when": "citations", "list": { "label": "\\b{{keywordPattern}}s?:|\\bValidates:?\\s+{{keywordPattern}}s?:?", "item": "(?<number>\\d+)(?![.\\d])", "id": "{{keyword}} {number}" } }
+      ],
+      "uncertainty": [
+        { "text": "{{items}} items of ordered lists under \"{{section}}\" headings inside {{keyword}} headings, in {{files}} files. Each item is a criterion numbered by its position, such as Criterion 1.2 for the second item of {{keyword}} 1." },
+        { "text": " {{citations}} citations such as \"{{keyword}}s: 1.2\" refer to criteria; citations of a whole {{keywordLower}} (\"{{keyword}}s: 3\") refer to it. A list mixing both forms stops at the first item of the other form.", "when": "citations" },
+        { "text": " It needs the {{keyword}} suggestion, or an existing {{keyword}} category." }
+      ]
+    },
+    {
+      "detector": "bugfix-criteria",
+      "join": "numbered-items",
+      "create": {
+        "key": "discovered-criteria",
+        "name": "Acceptance criterion",
+        "scope": "spec-folders",
+        "references": [
+          { "key": "{{self}}-citations", "category": "self", "list": { "label": "\\bRequirements?:|\\bValidates:?\\s+Requirements?:?", "item": "(?<number>\\d+)\\.(?<criterion>\\d+)", "id": "Criterion {number}.{criterion}" } }
+        ]
+      },
+      "rule": { "key": "{{self}}-bugfix", "pattern": "^(?<group>\\d+)\\.(?<item>\\d+)(?=\\s)", "id": "Criterion {group}.{item}", "defines": true },
+      "idDefinitionSites": {
+        "headings": { "enabled": false, "levels": [1, 2, 3, 4, 5, 6], "mode": "start" },
+        "tables": { "enabled": false, "column": "ID", "mode": "exact" },
+        "lists": { "enabled": false, "types": ["unordered", "ordered"], "mode": "start" },
+        "paragraphs": { "enabled": true, "mode": "start" }
+      },
+      "sectionTag": "bugfix:{{section}}",
+      "uncertainty": [
+        { "text": "{{count}} criteria of Kiro bugfix specifications in {{files}} files ({{sections.defect}} current, {{sections.expected}} expected, {{sections.unchanged}} unchanged behaviour) are paragraphs starting with their number, such as \"2.1 The system SHALL …\", which defines Criterion 2.1. They are tagged bugfix:defect, bugfix:expected, or bugfix:unchanged by their section." }
+      ],
+      "tagReason": [
+        { "text": "In {{files}} Kiro bugfix specifications, {{count}} criteria sit under the current ({{sections.defect}}), expected ({{sections.expected}}), and unchanged ({{sections.unchanged}}) behaviour headings, so they are tagged bugfix:defect, bugfix:expected, or bugfix:unchanged by their section." }
+      ]
+    },
+    {
+      "detector": "tasks",
+      "join": "category",
+      "create": {
+        "key": "kiro-task",
+        "name": "Task",
+        "role": "task",
+        "scope": "spec-folders",
+        "idScopes": ["**/.kiro/specs/*"],
+        "definitionPaths": ["**/.kiro/specs/**/tasks.md"]
+      },
+      "rule": { "key": "kiro-task", "pattern": "^(?<task>\\d+(?:\\.\\d+)?)(?=\\.?\\s)", "id": "Task {task}", "defines": true },
+      "names": { "keyword": "Task", "rule": { "key": "{{self}}-names", "pattern": "\\bTask \\d+(?:\\.\\d+)?\\b" } },
+      "idDefinitionSites": {
+        "headings": { "enabled": true, "levels": [1, 2, 3, 4, 5, 6], "mode": "start" },
+        "tables": { "enabled": false, "column": "ID", "mode": "exact" },
+        "lists": { "enabled": true, "types": ["unordered", "ordered"], "mode": "start", "checkboxOnly": true },
+        "paragraphs": { "enabled": false, "mode": "start" }
+      },
+      "statusSites": {
+        "paragraphs": { "enabled": false, "mode": "literal", "label": "Status:" },
+        "tables": { "enabled": false, "mode": "full", "column": "Status" },
+        "headings": { "enabled": false, "mode": "regex", "pattern": "\\[(?<status>[^\\]]+)\\]$" },
+        "checkboxes": { "enabled": true, "markers": { "x": "Done", "X": "Done", " ": "Open", "-": "In progress", "~": "In progress", "/": "In progress" } }
+      },
+      "uncertainty": [
+        { "text": "{{count}} checkbox items starting with a number in {{files}} tasks.md files of Kiro specs, such as \"- [ ] 1.1 Update the strategy\". Each defines a task, Task 1 or Task 1.1, numbered again in each spec, so each spec is its own scope; only checkbox items in tasks.md define them, and a bare number elsewhere is not a task. Their checkboxes give their status: Done ([x]), Open ([ ]), or In progress ([-], [~], or [/])." }
+      ]
+    }
+  ]
+}

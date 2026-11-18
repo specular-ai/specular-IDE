@@ -70,6 +70,9 @@ test('list hints retain exact spans, exclude later mentions and remain independe
   assert.deepEqual(fr.evidence.filter(e => e.context === 'list-item').map(e => e.id), ['FR-001', 'FR-002', 'FR-003', 'FR-004']);
   for (const e of fr.evidence) assert.equal(documents[e.file as keyof typeof documents].slice(e.offset, e.end), e.id);
   const proposal = validateProposal(candidateProposal(inventory), documents);
+  // Increment 103: FR-001 is listed in two folders without a specification scope, so list definitions stay off rather than duplicating it.
+  assert.equal(proposal.suggestions[0].category.idDefinitionSites, undefined);
+  assert.match(proposal.suggestions[0].uncertainty, /5 of them start list items, but 1 of 4 IDs would be defined more than once in the selected files, so list definitions stay off/);
   let config = mergeProposal({ version: 1, categories: [], rules: [] }, proposal);
   assert.equal(buildIndex(Object.entries(documents).map(([file, text]) => analyzeDocument(file, text, compileIdMatcher(config)))).definitions.length, 0);
   proposal.suggestions[0].category.idDefinitionSites = structuredClone(DEFAULT_ID_DEFINITION_SITES);
@@ -118,20 +121,18 @@ test('reviewed proposals preserve existing configuration and map selected custom
   assert.equal(renamed.rules.at(-1)!.category, renamed.categories.at(-1)!.key);
 });
 
-test('proposal collisions remap shared categories, rules and module memberships without changing inputs', () => {
+test('proposal collisions remap shared categories and rules without changing inputs', () => {
   const key = 'k'.repeat(64);
-  const base = { version: 1 as const, categories: [{ key, name: 'Existing' }], rules: [{ key, category: key, prefix: 'OLD' }], modules: [{ key, name: 'Existing module' }], moduleRules: [{ key, scope: 'file' as const, path: 'old.md', modules: [key] }] };
+  const base = { version: 1 as const, categories: [{ key, name: 'Existing' }], rules: [{ key, category: key, prefix: 'OLD' }] };
   const p = candidateProposal(discoverIds(documents)); p.suggestions = p.suggestions.slice(0, 2);
-  for (const s of p.suggestions) { s.category = { key, name: 'New category' }; s.rule!.key = key; s.rule!.category = key; s.modules = [{ key, name: 'New module' }]; s.moduleRules = [{ key, path: 'a.md', scope: 'file', modules: [key] }]; }
+  for (const s of p.suggestions) { s.category = { key, name: 'New category' }; s.rule!.key = key; s.rule!.category = key; }
   const original = structuredClone({ base, p });
   const result = mergeProposal(base, validateProposal(p, documents));
   assert.deepEqual({ base, p }, original);
   assert.equal(result.categories.length, 2); assert.equal(result.rules.length, 3);
-  assert.equal(result.modules!.length, 2); assert.equal(result.moduleRules!.length, 2);
   assert.deepEqual(result.rules.slice(1).map(r => r.category), [result.categories[1].key, result.categories[1].key]);
-  assert.deepEqual(result.moduleRules![1].modules, [result.modules![1].key]);
-  for (const list of [result.categories, result.rules, result.modules!, result.moduleRules!]) { assert.equal(new Set(list.map(v => v.key)).size, list.length); assert.ok(list.every(v => v.key.length <= 64)); }
-  assert.equal(result.rules[0].key, key); assert.deepEqual(result.moduleRules![0], base.moduleRules[0]);
+  for (const list of [result.categories, result.rules]) { assert.equal(new Set(list.map(v => v.key)).size, list.length); assert.ok(list.every(v => v.key.length <= 64)); }
+  assert.equal(result.rules[0].key, key);
 });
 test('versioned proposal review rejects missing, stale, oversized or malformed evidence without executing custom regex', () => {
   const p = candidateProposal(discoverIds(documents));
@@ -143,12 +144,8 @@ test('versioned proposal review rejects missing, stale, oversized or malformed e
   assert.doesNotThrow(() => validateProposal(slow, documents)); // Execution belongs exclusively in the bounded preview worker.
   slow.suggestions[0].rule!.pattern = '('; assert.throws(() => validateProposal(slow, documents), /regular expression/);
 });
-test('candidate coverage is bounded and proposal module file rules are validated and merged', () => {
+test('candidate coverage is bounded', () => {
   assert.throws(() => discoverIds({ 'a.md': 'REF-1 '.repeat(20001) }), /20,000/);
   assert.throws(() => discoverIds(Object.fromEntries(Array.from({ length: 2001 }, (_, i) => [i + '.md', '']))), /2000 files/);
   assert.throws(() => discoverIds({ 'a.md': 'x'.repeat(20 * 1024 * 1024 + 1) }), /20 MB/);
-  const p = candidateProposal(discoverIds(documents)); p.suggestions = p.suggestions.slice(0, 1);
-  p.suggestions[0].modules = [{ key: 'gui', name: 'GUI' }]; p.suggestions[0].moduleRules = [{ key: 'gui-files', scope: 'file', path: 'a.md', modules: ['gui'] }];
-  const result = mergeProposal(LEGACY_ID_CONFIGURATION, validateProposal(p, documents)); assert.equal(result.modules![0].name, 'GUI');
-  p.suggestions[0].moduleRules[0].path = '../outside'; assert.throws(() => validateProposal(p, documents), /project-relative/);
 });

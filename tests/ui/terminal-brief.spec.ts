@@ -28,7 +28,8 @@ async function launch(kind: 'codex' | 'claude') {
 }
 async function prepare() {
   await page.locator('#editor .cm-content').click(); await page.keyboard.press('Control+a');
-  await page.locator('#prepare-brief').click(); await page.locator('#brief-instruction').fill('Review this requirement.');
+  // Edits re-index after a short debounce, and the brief waits for the index.
+  await expect(async () => { await page.locator('#prepare-brief').click(); await expect(page.locator('#brief-instruction')).toBeVisible({ timeout: 500 }); }).toPass(); await page.locator('#brief-instruction').fill('Review this requirement.');
   await page.locator('#brief-create').click();
 }
 async function recorded(file: string) { return JSON.parse(await readFile(file, 'utf8')); }

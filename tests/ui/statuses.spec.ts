@@ -149,7 +149,7 @@ test('bulk status deletion cancels, persists an empty list across restart, and a
   await expect(card('REQ-1').locator('.lens-row > .status-badge')).not.toHaveCSS('border-color', 'rgb(18, 52, 86)');
   await card('REQ-1').locator('.status-evidence summary').click(); await card('REQ-1').locator('.status-evidence button').click();
   await expect(page.locator('#document-path')).toHaveText('a.md');
-  await reopenEmptyStatuses(); await page.getByRole('tab', { name: 'Discover IDs', exact: true }).click(); await page.getByRole('tab', { name: 'Authored statuses', exact: true }).click(); await expectEmptyStatuses();
+  await reopenEmptyStatuses(); await page.getByRole('tab', { name: 'Discover', exact: true }).click(); await page.getByRole('tab', { name: 'Authored statuses', exact: true }).click(); await expectEmptyStatuses();
   await page.screenshot({ path: 'test-results/statuses-empty-dark.png' }); await page.locator('#config-cancel').click();
   await page.locator('#theme-switch').click(); await close(); await launch(); await reopenEmptyStatuses();
   await page.screenshot({ path: 'test-results/statuses-empty-light.png' });

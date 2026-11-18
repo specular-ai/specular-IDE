@@ -72,10 +72,11 @@ test('docked terminals keep the shell and editor usable through resizing, hiding
   // Resize with pointer and keyboard, then restore the exact dock height.
   const initial = (await panel.boundingBox())!.height; const handle = (await divider.boundingBox())!;
   await page.mouse.move(handle.x + handle.width / 2, handle.y + 4); await page.mouse.down();
-  await page.mouse.move(handle.x + handle.width / 2, handle.y - 46); await page.mouse.up();
-  await expect.poll(async () => (await panel.boundingBox())!.height).toBeCloseTo(initial + 50, 0);
-  await divider.press('ArrowDown'); const height = (await panel.boundingBox())!.height;
-  expect(height).toBeCloseTo(initial + 25, 0);
+  // Shrink first: on small or scaled displays the default height is already the maximum.
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + 54); await page.mouse.up();
+  await expect.poll(async () => (await panel.boundingBox())!.height).toBeCloseTo(initial - 50, 0);
+  await divider.press('ArrowUp'); const height = (await panel.boundingBox())!.height;
+  expect(height).toBeCloseTo(initial - 25, 0);
   await page.locator('#terminal-maximize').click(); await expect(page.locator('#workbench')).toBeHidden();
   await expect(page.locator('#terminal-maximize')).toHaveText('Restore');
   await page.locator('#terminal-maximize').click(); await expect(page.locator('#workbench')).toBeVisible();

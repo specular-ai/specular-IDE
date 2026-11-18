@@ -75,11 +75,15 @@ test('manual and generated name collisions are visible without merging entries',
 });
 
 test('path validation rejects unsafe paths, same-target overlaps and malformed settings', () => {
-  for (const pattern of ['../specs/*', '/specs/*', 'C:/specs/*', 'specs\\*', 'specs/**', 'specs/*/nested', '.git/*', 'specs/node_modules/*', './specs/*'])
+  for (const pattern of ['../specs/*', '/specs/*', 'C:/specs/*', 'specs\\*', 'specs/**/x', '**', '../specs/**', 'specs/*/nested', '.git/*', 'specs/node_modules/*', './specs/*'])
     assert.throws(() => validateFolderGenerators([{ ...generator, pattern }]));
   for (const exclusions of [['other/folder'], ['specs/../outside'], ['specs/a', 'specs/A'], ['specs/a/*']])
     assert.throws(() => validateFolderGenerators([{ ...generator, exclusions }]));
   assert.throws(() => validateFolderGenerators([generator, { ...generator, key: 'nested', pattern: 'specs/a/*' }]), /overlap/);
+  // 96a: a ** pattern overlaps * patterns of the same target on the same or nested roots.
+  assert.throws(() => validateFolderGenerators([generator, { ...generator, key: 'deep', pattern: 'specs/**' }]), /overlap/);
+  assert.throws(() => validateFolderGenerators([{ ...generator, pattern: 'specs/**' }, { ...generator, key: 'nested', pattern: 'specs/group/*' }]), /overlap/);
+  assert.doesNotThrow(() => validateFolderGenerators([{ ...generator, pattern: 'specs/**', exclusions: ['specs/group/old'] }, { ...generator, key: 'modules', target: 'modules', pattern: 'specs/*' }]));
   assert.throws(() => validateFolderGenerators([generator, generator]), /unique/);
   assert.throws(() => validateFolderGenerators([{ ...generator, unknown: true }]));
   assert.doesNotThrow(() => validateFolderGenerators([generator, { ...generator, key: 'modules', target: 'modules' }]));

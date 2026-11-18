@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "id": "example.document-timeline",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "api": ">=0.2.0 <0.3.0",
   "customApi": 1,
   "entry": "dist/index.js",

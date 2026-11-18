@@ -1,5 +1,25 @@
 import type { FolderPreview, GeneratorTarget } from '../core/folder-generators';
 import type { IdConfiguration } from '../core/id-configuration';
+import { IndexWorker, type IndexResponse } from '../core/index-worker';
+import { explain } from './hover-hint';
+
+/** Increment 96: Update each target in the analysis worker, as the Update button does. A blocked entry stages nothing. */
+export async function updateFolderTargets(configuration: IdConfiguration, targets: readonly GeneratorTarget[], documents: Record<string, string>) {
+  let draft = configuration, entries = 0;
+  for (const target of targets) {
+    const result = await new Promise<IndexResponse>(resolve => {
+      const worker = new IndexWorker(() => new Worker(new URL('./analysis-worker.js', import.meta.url), { type: 'module' }), response => { worker.dispose(); resolve(response); });
+      worker.run({ revision: 1, updateFolders: target, configuration: draft, documents });
+    });
+    if (result.error || !result.folderConfiguration) {
+      const blocked = result.folderPreview?.entries.filter(entry => entry.blocked).flatMap(entry => entry.issues.map(issue => `${entry.name}: ${issue}`)) ?? [];
+      return { problems: result.error ? [result.error] : blocked.length ? blocked : ['Folder update returned no result.'], entries };
+    }
+    entries += result.folderPreview?.entries.filter(entry => entry.change === 'new').length ?? 0;
+    draft = result.folderConfiguration;
+  }
+  return { configuration: draft, problems: [] as string[], entries };
+}
 
 /** Generator settings share the configuration draft; Update stages mappings, Apply persists them. */
 export class FolderGeneratorEditor {
@@ -16,14 +36,15 @@ export class FolderGeneratorEditor {
   render() {
     const title = document.createElement('h3'); title.textContent = `Folder-derived ${this.target}`;
     const hint = document.createElement('p'); hint.className = 'config-hint';
-    hint.textContent = 'One entry per immediate child folder, including IDs defined in descendant Markdown. Update stages entries and mappings in this draft. Preview matches and Apply save the reviewed changes. New folders require another Update.';
+    hint.textContent = 'A pattern such as specs/* gives one entry per immediate child folder; specs/** gives one per folder holding a specification file (spec.md, requirements.md, bugfix.md, design.md, tasks.md, plan.md, or proposal.md) at any depth, skipping group folders. Entries include IDs defined in descendant Markdown. Update stages entries and mappings in this draft. Preview matches and Apply save the reviewed changes. New folders require another Update.';
     const add = this.button('Add folder pattern', () => {
       const config = this.draft(), used = new Set([...(config.folderGenerators ?? []).map(rule => rule.key), ...(config.generatedFolders ?? []).map(mapping => mapping.generator)]);
       let n = 1; while (used.has(`generator${n}`)) n++;
       (config.folderGenerators ??= []).push({ key: `generator${n}`, target: this.target, pattern: 'specs/*', exclusions: [] }); this.render(); this.changed();
       this.root.querySelector<HTMLInputElement>('.folder-generator-row:last-of-type input')?.focus();
     }); add.disabled = this.rules.length >= 32;
-    this.root.replaceChildren(title, hint, add);
+    explain(title, hint.textContent!);
+    this.root.replaceChildren(title, add);
     for (const rule of this.rules) {
       const row = document.createElement('div'); row.className = 'folder-generator-row';
       const label = document.createElement('label'); label.textContent = 'Folder pattern';

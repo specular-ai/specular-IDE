@@ -132,7 +132,7 @@ test('categories own independent patterns and both rule sections collapse withou
   await expect(rules.locator('.config-category-rule-list')).toBeHidden();
   // Adding/removing another category rerenders the draft; disclosure state belongs to this category.
   await page.locator('#config-add-category').click();
-  await page.getByRole('button', { name: 'Remove category 3', exact: true }).click();
+  await page.getByRole('button', { name: 'Delete category 3', exact: true }).click();
   await expect(scopes).not.toHaveAttribute('open'); await expect(rules).not.toHaveAttribute('open');
   await scopes.locator(':scope > summary').click();
   await expect(scopes.getByLabel('Scope pattern', { exact: true })).toHaveValue('specs/*');

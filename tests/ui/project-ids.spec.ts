@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { failAutosave } from './autosave-fixture';
+import { seedLegacyConfiguration } from './legacy-configuration';
 
 let app: ElectronApplication, page: Page, root: string, project: string;
 const configuration = { version: 1, categories: [{ key: 'requirements', name: 'Requirements', role: 'requirement' }],
@@ -87,7 +88,7 @@ test('live rule changes preserve unsaved text and undo and refresh custom matche
 test('reopening and switching projects use their own conventions', async () => {
   await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(configuration)); await launch();
   await expect(page.locator('#metric-ids')).toHaveText('2');
-  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-01 Legacy\nREF-01\n');
+  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-01 Legacy\nREF-01\n'); await seedLegacyConfiguration(other);
   await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other);
   await page.locator('#open-project').click();
   await expect(page.locator('#project-heading')).toHaveText('other');

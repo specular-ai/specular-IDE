@@ -193,31 +193,39 @@ button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { opacity: .4; cursor: default; }
 button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--text-accent, #8bd5cc); outline-offset: -2px; }
-.project-timeline { min-height: 100vh; padding: 18px; background: var(--surface-raised, #171d24); }
-.project-timeline h2 { margin: 0 0 8px; font-size: 20px; color: var(--text-accent, #def0ec); }
-.project-timeline h3 { margin: 18px 0 8px; font-size: 13px; color: var(--text-accent, #a8eadc); }
-.timeline-intro, .timeline-summary, .timeline-scope p, .timeline-pager span { font-size: 12px; line-height: 1.6; color: var(--text-muted, #a1b0bc); }
-.timeline-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px 12px; align-items: end; margin: 16px 0 10px; }
-.timeline-controls label { display: block; font-size: 11px; margin-bottom: 4px; }
-.timeline-controls input, .timeline-controls select { width: 100%; min-width: 0; padding: 7px; background: var(--surface-base, #11161c); border: 1px solid var(--border-strong, #40505e); border-radius: 4px; }
-.timeline-summary { margin: 0 0 10px; }
-.timeline-scope { margin: 0 0 14px; }
-.timeline-scope summary { font-size: 12px; cursor: pointer; color: var(--text-muted, #a1b0bc); }
-.timeline-event { margin: 0 0 8px; padding: 11px 12px; background: var(--surface-base, #11161c); border: 1px solid var(--surface-selected, #29313a); border-radius: 6px; }
-.timeline-event p { margin: 0 0 6px; white-space: pre-wrap; }
-.timeline-event small { display: block; font-size: 11px; color: var(--text-muted, #91a0ad); }
-.timeline-evidence { margin-top: 7px; }
-.button { min-height: 32px; padding: 6px 11px; border: 1px solid var(--surface-selected, #39464f); border-radius: 6px; background: var(--surface-raised, #202933); }
+.project-timeline { min-height: 100vh; padding: 12px 14px; background: var(--surface-raised, #171d24); }
+.project-timeline h2 { margin: 0 0 4px; font-size: 16px; color: var(--text-accent, #def0ec); }
+.timeline-intro, .timeline-summary, .timeline-pager span { font-size: 12px; line-height: 1.5; color: var(--text-muted, #a1b0bc); }
+.timeline-intro { margin: 0 0 6px; }
+.timeline-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 10px; align-items: end; margin: 8px 0 6px; }
+.timeline-controls label { display: block; font-size: 11px; margin-bottom: 2px; }
+.timeline-controls input, .timeline-controls select { width: 100%; min-width: 0; padding: 4px 6px; font: inherit; font-size: 12px; background: var(--surface-base, #11161c); border: 1px solid var(--border-strong, #40505e); border-radius: 4px; }
+.timeline-more { margin: 0 0 6px; }
+.timeline-more > summary { font-size: 12px; cursor: pointer; color: var(--text-muted, #a1b0bc); }
+.timeline-more > .timeline-controls { margin: 4px 0 0; }
+/* The main row: a wide source file, narrower dates and event type, then the reset button; it wraps on narrow views. */
+.project-timeline > .timeline-controls { grid-template-columns: minmax(180px, 2fr) repeat(3, minmax(120px, 1fr)) auto; }
+@media (max-width: 720px) { .project-timeline > .timeline-controls { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); } }
+.timeline-summary { margin: 0 0 4px; }
+.timeline-day { display: grid; grid-template-columns: 84px minmax(0, 1fr); column-gap: 10px; padding: 3px 0; border-top: 1px solid var(--surface-selected, #29313a); }
+.timeline-day h3 { margin: 0; padding-top: 3px; font-size: 12px; font-weight: 600; color: var(--text-accent, #a8eadc); font-variant-numeric: tabular-nums; }
+.timeline-event { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; padding: 2px 0; }
+.timeline-event p { flex: 1 1 260px; min-width: 0; margin: 0; white-space: pre-wrap; }
+.timeline-event small { font-size: 11px; color: var(--text-muted, #91a0ad); }
+.timeline-location { margin-left: auto; padding: 0 2px; font: 11px Consolas, monospace; background: none; border: none; color: var(--text-muted, #91a0ad); cursor: pointer; text-align: right; overflow-wrap: anywhere; }
+.timeline-location:hover:not(:disabled), .timeline-location:focus-visible { color: var(--text-accent, #a8eadc); text-decoration: underline; }
+.timeline-location:disabled { cursor: default; opacity: 0.6; }
+.button { min-height: 26px; padding: 3px 10px; font: inherit; font-size: 12px; border: 1px solid var(--surface-selected, #39464f); border-radius: 6px; background: var(--surface-raised, #202933); }
 .button:hover:not(:disabled) { background: var(--surface-selected, #2a3741); border-color: var(--text-muted, #607581); }
 .quiet-button { padding: 5px 7px; font-size: 11px; background: none; border: none; color: var(--text-muted, #91a0ad); }
 .quiet-button:hover { color: var(--text-accent, #8bd5cc); }
-.timeline-pager { display: flex; gap: 10px; align-items: center; margin: 12px 0 0; }
+.timeline-pager { display: flex; gap: 10px; align-items: center; margin: 8px 0 0; }
 .coral { color: var(--text-warning, #e3ba78); }
-.timeline-label { display: inline-block; margin: 0 6px 6px 0; padding: 1px 6px; font-size: 11px; border: 1px solid var(--surface-selected, #29313a); border-radius: 4px; color: var(--text-accent, #a8eadc); }
-.timeline-status { display: inline-block; margin: 0 0 6px; padding: 1px 6px; font-size: 11px; border-left: 4px solid var(--text-muted, #91a0ad); background: var(--surface-raised, #171d24); }
-.timeline-chart { margin: 14px 0 6px; }
+.timeline-label { display: inline-block; flex: none; padding: 0 6px; font-size: 11px; border: 1px solid var(--surface-selected, #29313a); border-radius: 4px; color: var(--text-accent, #a8eadc); }
+.timeline-status { display: inline-block; flex: none; padding: 0 6px; font-size: 11px; border-left: 4px solid var(--text-muted, #91a0ad); background: var(--surface-raised, #171d24); }
+.timeline-chart { margin: 4px 0; }
 .timeline-chart > summary { font-size: 12px; cursor: pointer; color: var(--text-muted, #a1b0bc); }
-.chart-body svg { display: block; margin-top: 8px; touch-action: none; user-select: none; }
+.chart-body svg { display: block; margin-top: 4px; touch-action: none; user-select: none; }
 .chart-axis { stroke: var(--border-strong, #40505e); }
 .chart-grid { stroke: var(--surface-selected, #29313a); stroke-dasharray: 2 3; }
 .chart-label { font-size: 10px; fill: var(--text-muted, #a1b0bc); }
@@ -231,11 +239,11 @@ button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-v
 .chart-hit:focus { outline: none; }
 .chart-hit:focus-visible { stroke: var(--text-accent, #8bd5cc); stroke-width: 2; }
 .s0 { --c: var(--series-0); } .s1 { --c: var(--series-1); } .s2 { --c: var(--series-2); } .s3 { --c: var(--series-3); } .s4 { --c: var(--series-4); } .so { --c: var(--series-other); }
-.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin: 6px 0; font-size: 11px; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: center; margin: 2px 0; font-size: 11px; }
 .chart-key { padding: 3px 6px; font-size: 11px; background: none; border: 1px solid transparent; border-radius: 4px; color: var(--text-primary, #d7e0e6); }
 .chart-key[aria-pressed="true"] { border-color: var(--text-accent, #8bd5cc); }
 .chart-key::before { content: ''; display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 2px; background: var(--c); vertical-align: -1px; }
-.chart-readout { min-height: 1.6em; margin: 4px 0; font-size: 12px; color: var(--text-muted, #a1b0bc); }
+.chart-readout { min-height: 1.5em; margin: 2px 0; font-size: 12px; color: var(--text-muted, #a1b0bc); }
 .chart-table summary { font-size: 11px; cursor: pointer; color: var(--text-muted, #a1b0bc); }
 .chart-table table { margin-top: 6px; border-collapse: collapse; font-size: 11px; }
 .chart-table th, .chart-table td { padding: 3px 10px 3px 0; text-align: left; vertical-align: top; }
@@ -278,7 +286,7 @@ export function activate(context: CustomViewContext) {
   const css = el('style'); css.textContent = STYLE;
   root.replaceChildren(css, surface);
   surface.append(el('h2', 'Project timeline'),
-    el('p', 'Dated entries and dated statuses from the project model, across every Markdown file in this project, whichever document is open.', 'timeline-intro'));
+    el('p', 'Dated entries and statuses across the project\u2019s Markdown, whichever document is open.', 'timeline-intro'));
   const warnings = el('p', '', 'coral'); warnings.hidden = true; surface.append(warnings);
   // The histogram band is a navigator over the cards: it reads and writes the same filters.
   const chart = el('details', '', 'timeline-chart'); chart.id = 'timeline-chart'; chart.open = true;
@@ -287,28 +295,23 @@ export function activate(context: CustomViewContext) {
 
   const controls = el('div', '', 'timeline-controls'); surface.append(controls);
   const file = control('select', 'timeline-file', 'Source file', controls);
-  const mentioned = control('select', 'timeline-id', 'Mentioned ID', controls);
+  // The less-used filters sit behind a toggle, which opens by itself while one of them is set.
+  const more = el('details', '', 'timeline-more'), moreSummary = el('summary', 'More filters'), moreControls = el('div', '', 'timeline-controls');
+  more.append(moreSummary, moreControls);
+  const mentioned = control('select', 'timeline-id', 'Mentioned ID', moreControls);
   const from = control('input', 'timeline-from', 'From (inclusive)', controls); from.type = 'date';
   const to = control('input', 'timeline-to', 'To (inclusive)', controls); to.type = 'date';
   const kind = control('select', 'timeline-kind', 'Event type', controls);
   options(kind, [...KINDS], 'All event types', filters.kind, value => KIND_LABELS[value as EventKind]);
-  const statusFilter = control('select', 'timeline-status', 'Status', controls);
+  const statusFilter = control('select', 'timeline-status', 'Status', moreControls);
   const resetField = el('div');
   resetField.append(action('Show all events', () => {
     filters = NO_FILTERS; page = 0; file.value = ''; mentioned.value = ''; from.value = ''; to.value = ''; kind.value = ''; statusFilter.value = ''; changed();
   }, 'button'));
   controls.append(resetField);
+  surface.append(more);
 
   const summary = el('p', '', 'timeline-summary'); summary.id = 'timeline-summary'; summary.setAttribute('role', 'status'); surface.append(summary);
-  const scope = el('details', '', 'timeline-scope');
-  scope.append(el('summary', 'Recognized format and scope'),
-    el('p', 'Recorded entries: Markdown list entries whose content begins with a real ISO calendar date, such as "- 2026-09-15: Recorded event", together with their indented continuation lines.'),
-    el('p', 'Milestones and last-updated dates: headings containing a date, such as "## [1.2.0] - 2026-05-22", and labelled fields such as "**Created**: 2025-12-12", as configured in the project\u2019s date rules; last-updated dates are hidden unless their rule is enabled.'),
-    el('p', 'Statuses: authored statuses of IDs whose value contains a date, such as "Status: Implemented on 2026-10-13", shown with the configured status name and colour. Both rules are configured in the project configuration; undated statuses are not shown.'),
-    el('p', 'Ignored: quoted and fenced examples, invalid calendar dates, undated entries, document-level "Last updated" dates, dated headings and tables, and statuses outside an ID\u2019s section. Their absence is not evidence that no event occurred.'),
-    el('p', 'Equal days keep a deterministic file-path and source-position order and claim no time-of-day ordering. Identical text and conflicting dates in different files stay separate accounts; nothing is merged or reconciled.'),
-    el('p', 'Mentioned IDs follow the configured ID categories and are recorded text, not verified or causal links. A status records what the specification states, not verified delivery. Filters and pages change only the display.'));
-  surface.append(scope);
   const content = el('div'); surface.append(content);
 
   const save = () => context.saveState?.(JSON.stringify({ ...filters, page }));
@@ -348,7 +351,10 @@ export function activate(context: CustomViewContext) {
     const name = (segment: number) => (segment < series.length ? series[segment].file : 'Other files');
     const describe = (bucket: HistogramBucket) => `${range(bucket)}: ${plural(bucket.total, 'entry', 'entries')}, ${bucket.matching} matching the file and ID filters`
       + bucket.segments.map((segment, index) => (segment.total ? `; ${name(index)} ${segment.total}` : '')).join('') + '.';
-    chartBody.append(el('p', `Dated entries per ${unit}, ${buckets[0].start} to ${buckets[count - 1].end}. Faint bars count every entry; solid bars match the file and ID filters. Select a bar, or drag across bars, to filter the cards by date.`, 'timeline-intro'));
+    // The fuller explanation is the line's tooltip, keeping the band to one short line.
+    const caption = el('p', `Dated entries per ${unit}, ${buckets[0].start} to ${buckets[count - 1].end}. Select or drag across bars to filter by date.`, 'timeline-intro');
+    caption.title = 'Faint bars count every entry; solid bars match the file and ID filters. Select a bar, or drag across bars, to filter the entries by date.';
+    chartBody.append(caption);
 
     const width = chartWidth = Math.max(320, Math.floor(chartBody.clientWidth || 640)), height = 170;
     const left = 34, right = 8, top = 12, bottom = 22, plotW = width - left - right, plotH = height - top - bottom;
@@ -390,7 +396,7 @@ export function activate(context: CustomViewContext) {
       const hit = shape('rect', { x: x(index), y: top, width: slot, height: plotH, class: 'chart-hit', role: 'button', tabindex: index === focused ? 0 : -1, 'aria-label': describe(bucket), 'data-index': index });
       const title = shape('title'); title.textContent = describe(bucket); hit.append(title); graphic.append(hit); return hit;
     });
-    const readout = el('p', 'Hover over or focus a bar to read its counts.', 'chart-readout'); readout.setAttribute('aria-live', 'polite');
+    const readout = el('p', '', 'chart-readout'); readout.setAttribute('aria-live', 'polite');
     const show = (index: number) => { readout.textContent = describe(buckets[index]); };
     const at = (event: PointerEvent) => Math.min(count - 1, Math.max(0, Math.floor((event.clientX - graphic.getBoundingClientRect().left - left) / slot)));
     const stretch = (a: number, b: number) => { preview.setAttribute('x', String(x(Math.min(a, b)))); preview.setAttribute('width', String((Math.abs(a - b) + 1) * slot)); };
@@ -446,6 +452,9 @@ export function activate(context: CustomViewContext) {
     const project = request.models.project!;
     options(statusFilter, statusNames(events, project.configuration.statuses), 'All statuses', filters.status);
     kind.value = filters.kind;
+    const hidden = [filters.id, filters.status].filter(Boolean).length;
+    if (hidden) more.open = true;
+    moreSummary.textContent = hidden ? `More filters (${hidden} active)` : 'More filters';
     from.value = filters.from; to.value = filters.to;
     warnings.hidden = !request.models.physical!.warnings.length;
     warnings.textContent = request.models.physical!.warnings.join(' ');
@@ -463,12 +472,14 @@ export function activate(context: CustomViewContext) {
       content.append(el('p', events.length
         ? 'No events match these filters. Change a filter or choose Show all events.'
         : request.models.physical!.documents.length
-          ? 'No dated entries or dated statuses in this project’s Markdown. Open Recognized format and scope for the extracted formats.'
+          ? 'No dated entries or dated statuses in this project’s Markdown. The timeline README lists the recognized formats.'
           : 'This project has no Markdown files to collect from.', 'timeline-intro'));
       pager(content, 0); return;
     }
     for (const group of days(matching.slice(page * PAGE, (page + 1) * PAGE))) {
-      content.append(el('h3', group.date));
+      // One row per day: the date once, in a left column, beside its entries.
+      const day = el('div', '', 'timeline-day'), entries = el('div');
+      day.append(el('h3', group.date), entries); content.append(day);
       for (const event of group.events) {
         const article = el('article', '', 'timeline-event'); article.dataset.file = event.file; article.dataset.kind = event.kind;
         if (event.status) {
@@ -487,11 +498,10 @@ export function activate(context: CustomViewContext) {
           article.append(el('p', event.text));
           if (event.ids.length) article.append(el('small', `Mentioned IDs: ${event.ids.map(keyLabel).join(', ')}`));
         }
-        article.append(el('small', event.file));
-        const evidence = el('div', '', 'timeline-evidence');
-        const open = action(`Open ${event.file}:${event.line}`, () => navigate(event), 'button'); open.disabled = stale;
-        evidence.append(open);
-        article.append(evidence); content.append(article);
+        // The location opens the source; its accessible name keeps the action explicit.
+        const open = action(`${event.file}:${event.line}`, () => navigate(event), 'timeline-location'); open.disabled = stale;
+        open.setAttribute('aria-label', `Open ${event.file}:${event.line}`); open.title = `Open ${event.file}:${event.line}`;
+        article.append(open); entries.append(article);
       }
     }
     pager(content, matching.length);

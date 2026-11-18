@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fakeClaude, fakeCodex, PROJECT } from '../helpers/agent-discovery-fixtures';
+import { expandDiscoveryMethods } from './configuration-entries';
 
 let app: ElectronApplication, page: Page, project: string;
 async function launch(scenario: Parameters<typeof fakeCodex>[0]) {
@@ -15,7 +16,7 @@ async function launch(scenario: Parameters<typeof fakeCodex>[0]) {
   await page.locator('#codex-path').fill(fixture.executable); await page.locator('#codex-api-key').fill('sk-fixture');
   await page.locator('#codex-connect').click(); await expect(page.locator('#codex-connection-state')).toHaveAttribute('data-status', 'connected', { timeout: 20000 });
   await page.locator('#agent-setup-close').click();
-  await page.locator('#project-config-open').click(); await expect(page.getByRole('tab', { name: 'Discover IDs', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await page.locator('#project-config-open').click(); await expect(page.getByRole('tab', { name: 'Discover', exact: true })).toHaveAttribute('aria-selected', 'true'); await expandDiscoveryMethods(page);
   return fixture;
 }
 test.afterEach(async ({}, info) => {
@@ -91,13 +92,13 @@ test('the tool-call limit is validated, sent to the run, and stated to the agent
   // Agent, model, and limit share one row at the default window size.
   const tops = await Promise.all(['Agent', 'Agent model', 'Tool-call limit'].map(async label => (await page.getByLabel(label, { exact: true }).boundingBox())!.y));
   expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(4);
-  await expect(hint).toHaveText('A run stops after 80 tool calls or 13 minutes. The agent is told its limit and warned near the end.');
+  await expect(hint).toBeEmpty();
   for (const value of ['300', '19', '', '25.5']) {
     await limit.fill(value);
     await expect(run).toBeDisabled(); await expect(hint).toHaveText('The tool-call limit must be a whole number from 20 to 200.');
   }
-  await limit.fill('200'); await expect(hint).toContainText('200 tool calls or 30 minutes');
-  await limit.fill('25'); await expect(run).toBeEnabled(); await expect(hint).toContainText('25 tool calls or 10 minutes');
+  await limit.fill('200'); await expect(run).toBeEnabled(); await expect(hint).toBeEmpty();
+  await limit.fill('25'); await expect(run).toBeEnabled(); await expect(hint).toBeEmpty();
   await run.click();
   await expect(page.locator('#agent-discovery-progress .agent-progress-tool').filter({ hasText: 'Evaluated draft' })).toHaveText('2/25 · Evaluated draft 1: 2 categories, 6 definitions, 0 duplicates', { timeout: 30000 });
   await expect(page.locator('#agent-discovery-status')).toContainText('The agent proposed 2 categories');
@@ -126,7 +127,7 @@ test('Claude Code runs from the path in Agent setup and its proposal is reviewed
   app = await electron.launch({ args: ['.', '--project=' + project], env: { ...env, SPECULAR_USER_DATA: path.join(fixture.root, 'user-data') } });
   page = await app.firstWindow(); await expect(page.locator('#project-heading')).toHaveText('project');
   await page.locator('#show-agent-setup').click(); await page.locator('#claude-path').fill(fixture.executable); await page.locator('#agent-setup-close').click();
-  await page.locator('#project-config-open').click();
+  await page.locator('#project-config-open').click(); await expandDiscoveryMethods(page);
   await page.getByLabel('Agent', { exact: true }).selectOption('claude');
   await page.getByLabel('Agent model').fill('sonnet');
   await page.locator('#run-agent-discovery').click();
@@ -138,4 +139,27 @@ test('Claude Code runs from the path in Agent setup and its proposal is reviewed
   await page.locator('#agent-discovery-stage').click();
   await expect(page.locator('#agent-discovery-status')).toContainText('Added 2 categories');
   await expect(access(path.join(project, '.specular/project.json'))).rejects.toThrow();
+});
+
+test('agent discovery proposes a feature generator that staging adds and updates (96)', async () => {
+  test.setTimeout(90000);
+  await launch('folders');
+  await page.locator('#run-agent-discovery').click();
+  await expect(page.locator('#agent-discovery-status')).toContainText('The agent proposed 2 categories and folder-derived features or modules', { timeout: 30000 });
+  const folders = page.locator('#agent-discovery-review [data-category="folders"]');
+  await expect(folders.locator('h4')).toHaveText('Features and modules');
+  await expect(folders.locator('.agent-discovery-current')).toHaveText('Current folder patterns: none.');
+  await expect(folders.locator('.agent-discovery-proposed')).toHaveText('Added folder patterns: Features from specs/*. Adding them runs Update; existing features, modules, and patterns stay as they are.');
+  await expect(folders.locator('.agent-discovery-counts')).toContainText('specs/*: 2 folders');
+  await expect(folders.locator('.agent-discovery-rationale')).toHaveText('Agent rationale (agent-generated): Each folder in specs/ holds one feature specification.');
+  await page.locator('#agent-discovery-stage').click();
+  await expect(page.locator('#agent-discovery-status')).toContainText('and 1 folder pattern to the draft, with 2 new entries from Update');
+  await page.getByRole('tab', { name: 'Application features', exact: true }).click();
+  await expect(page.locator('#config-folder-features input[aria-label="Folder pattern"]')).toHaveValue('specs/*');
+  await page.locator('#config-preview').click(); await expect(page.locator('#config-status')).toContainText('Preview ready');
+  await page.locator('#config-apply').click(); await expect(page.locator('#project-configuration-dialog')).not.toBeVisible();
+  const saved = JSON.parse(await readFile(path.join(project, '.specular/project.json'), 'utf8'));
+  expect(saved.folderGenerators).toEqual([{ key: 'generator1', target: 'features', pattern: 'specs/*', exclusions: [] }]);
+  expect(saved.features.map((f: { name: string }) => f.name)).toEqual(['001-login', '002-export']);
+  expect(saved.generatedFolders.map((m: { folder: string }) => m.folder)).toEqual(['specs/001-login', 'specs/002-export']);
 });

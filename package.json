@@ -1,6 +1,6 @@
 {
   "name": "specular",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "A Markdown-centered desktop IDE for agentic development",
   "productName": "Specular",
@@ -51,6 +51,7 @@
     "unist-util-visit": "5.1.0"
   },
   "dependencies": {
-    "node-pty": "1.1.0"
+    "node-pty": "1.1.0",
+    "yaml": "2.8.4"
   }
 }

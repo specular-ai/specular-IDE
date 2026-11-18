@@ -323,7 +323,7 @@ test('card editor preserves selections on failed saves and recovers from externa
 
 test('card editor protects suspended configuration drafts and supports empty-module setup', async () => {
   await editModules(); await expect(page.locator('#module-assignment-options')).toContainText('No modules configured');
-  await page.locator('#module-assignment-configure').click(); await expect(page.getByRole('tab', { name: 'Discover IDs', exact: true })).toHaveAttribute('aria-selected', 'true'); await page.getByRole('tab', { name: 'Application modules', exact: true }).click();
+  await page.locator('#module-assignment-configure').click(); await expect(page.getByRole('tab', { name: 'Discover', exact: true })).toHaveAttribute('aria-selected', 'true'); await page.getByRole('tab', { name: 'Application modules', exact: true }).click();
   await page.getByRole('button', { name: 'Add module', exact: true }).click(); await page.locator('.module-row').getByLabel('Module name', { exact: true }).fill('Draft module');
   await page.locator('#config-preview').click(); await expect(page.locator('#config-status')).toContainText('Preview ready');
   await page.locator('#config-results button').first().click(); await expect(page.locator('#project-configuration-dialog')).not.toBeVisible();

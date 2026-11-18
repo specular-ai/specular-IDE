@@ -2,7 +2,7 @@ import { idKey } from '../core/id-identity';
 import { statusKey } from '../core/statuses';
 import type { Occurrence } from '../shared/types';
 
-export type LensGrouping = 'none' | 'status' | 'module' | 'feature';
+export type LensGrouping = 'none' | 'status' | 'module' | 'feature' | 'file' | 'tag';
 export interface LensGroup { key: string; label: string; items: Occurrence[]; count: number }
 
 /** Group the filtered definitions, retaining every source but counting scoped identities once. */
@@ -10,7 +10,10 @@ export function groupDefinitions(items: readonly Occurrence[], mode: Exclude<Len
   const groups = new Map<string, LensGroup>();
   for (const item of items) {
     let memberships: { key: string; label: string }[];
-    if (mode === 'status') {
+    if (mode === 'file') memberships = [{ key: `value:${item.file}`, label: item.file }];
+    // Increment 96f: section tags, with untagged definitions in their own group.
+    else if (mode === 'tag') memberships = item.tags?.length ? item.tags.map(tag => ({ key: `value:${tag}`, label: tag })) : [{ key: 'missing', label: 'Untagged' }];
+    else if (mode === 'status') {
       const status = item.authoredStatus, evidence = status?.evidence[0];
       const value = evidence?.display ?? evidence?.value;
       memberships = status?.state === 'conflict' ? [{ key: 'conflict', label: 'Status conflicts' }]
@@ -29,7 +32,11 @@ export function groupDefinitions(items: readonly Occurrence[], mode: Exclude<Len
       group.items.push(item); groups.set(key, group);
     }
   }
-  for (const group of groups.values()) group.count = new Set(group.items.map(idKey)).size;
+  for (const group of groups.values()) {
+    group.count = new Set(group.items.map(idKey)).size;
+    // Increment 27: a file group lists its definitions in source order.
+    if (mode === 'file') group.items.sort((a, b) => a.offset - b.offset);
+  }
   return [...groups.values()].sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
 }
 
@@ -60,9 +67,12 @@ export class LensGroups {
       // Closed groups keep their counts without building hidden cards.
       if (details.open) appendPage();
       details.ontoggle = () => {
-        if (!details.isConnected) return;
-        if (details.open) { this.closed.delete(key); if (!shown) appendPage(); }
-        else this.closed.add(key);
+        if (details.open) this.closed.delete(key); else this.closed.add(key);
+        // A refresh can replace the group before its toggle event arrives; apply the user's toggle to the replacement.
+        if (!details.isConnected) {
+          const current = [...parent.querySelectorAll<HTMLDetailsElement>('.lens-group')].find(item => item.dataset.group === key);
+          if (current && current.open !== details.open) current.open = details.open;
+        } else if (details.open && !shown) appendPage();
       };
       parent.append(details);
     }

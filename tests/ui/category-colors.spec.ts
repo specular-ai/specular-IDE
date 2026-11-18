@@ -3,6 +3,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pluginFrame } from './plugin-frame';
+import { seedLegacyConfiguration } from './legacy-configuration';
 let app: ElectronApplication, page: Page, root: string, project: string;
 const initial = { version: 1, categories: [{ key: 'needs', name: 'Business needs', role: 'requirement' }, { key: 'design', name: 'Design', role: 'design' }], rules: [{ key: 'ref', category: 'needs', prefix: 'REF' }, { key: 'dec', category: 'design', prefix: 'DEC' }] };
 const category = () => page.locator('.config-category').first();
@@ -72,7 +73,7 @@ test('colors stay project-specific and diagnostics retain separate labels at min
   await expect(category().locator('[data-color-mode="light"]')).toHaveCSS('border-left-color', 'rgb(255, 255, 255)');
   const fits = await page.locator('#project-configuration-dialog').evaluate(element => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight; }); expect(fits).toBe(true);
   await category().locator('[data-color-mode="light"]').scrollIntoViewIfNeeded(); await page.screenshot({ path: 'test-results/category-colors-minimum.png' }); await page.keyboard.press('Escape');
-  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-01 Another project\n');
+  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-01 Another project\n'); await seedLegacyConfiguration(other);
   await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other); await page.locator('#open-project').click();
   await expect(page.locator('#project-heading')).toHaveText('other'); await expect(page.locator('.lens-card[data-id="REQ-01"]')).not.toHaveCSS('border-left-color', 'rgb(255, 204, 0)');
 });

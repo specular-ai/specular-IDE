@@ -1,6 +1,6 @@
 {
   "name": "specular-example-document-timeline",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "scripts": { "build": "tsc -p tsconfig.json", "validate": "specular-plugin-validate ." },

@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { failAutosave } from './autosave-fixture';
+import { seedLegacyConfiguration } from './legacy-configuration';
 let app: ElectronApplication, page: Page, root: string, project: string;
 const config = { version: 1, categories: [{ key: 'req', name: 'Requirements', role: 'requirement' }, { key: 'dd', name: 'Design', role: 'design' }],
   rules: [{ key: 'req', category: 'req', prefix: 'REQ' }, { key: 'dd', category: 'dd', prefix: 'DD' }],
@@ -15,7 +16,7 @@ async function launch() {
   await expect(page.locator('#project-heading')).toHaveText('project');
 }
 async function close() { await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(w => w.destroy())); await app.close(); }
-async function open() { await page.locator('#project-config-open').click(); await page.getByRole('tab', { name: 'Definition and status sites', exact: true }).click(); await expect(sites().getByLabel('Enable heading definitions')).toBeVisible(); }
+async function open() { await page.locator('#project-config-open').click(); await page.getByRole('tab', { name: 'Definition and status sites', exact: true }).click(); await expect(sites().getByLabel('ID definitions in headings')).toBeVisible(); }
 async function preview() { await page.locator('#config-preview').click(); await expect(page.locator('#config-status')).toContainText('Preview ready'); }
 async function apply() { await preview(); await page.locator('#config-apply').click(); await expect(page.locator('#project-configuration-dialog')).not.toBeVisible(); }
 async function saved() { return JSON.parse(await readFile(path.join(project, '.specular/project.json'), 'utf8')); }
@@ -47,10 +48,10 @@ test('heading levels, disabled sites, Cancel and Restore defaults preserve unrel
   await open(); await configureAnywhere(); await sites().getByLabel('H1', { exact: true }).uncheck(); await preview();
   await expect(page.locator('#config-summary')).toContainText('2 definitions'); await expect(page.locator('#config-changes')).toContainText('1 definitions become references');
   await page.keyboard.press('Escape'); expect(await saved()).toEqual(config);
-  await open(); await sites().getByLabel('Enable heading definitions').uncheck(); await sites().getByLabel('Enable table definitions').uncheck(); await apply();
+  await open(); await sites().getByLabel('ID definitions in headings').uncheck(); await sites().getByLabel('ID definitions in tables').uncheck(); await apply();
   await expect(page.locator('#metric-ids')).toHaveText('0'); await close(); await launch();
   await page.locator('#project-config-open').click(); await page.getByRole('tab', { name: 'Definition and status sites', exact: true }).click();
-  await expect(sites().getByLabel('Enable heading definitions')).not.toBeChecked(); await expect(sites().getByLabel('Enable table definitions')).not.toBeChecked();
+  await expect(sites().getByLabel('ID definitions in headings')).not.toBeChecked(); await expect(sites().getByLabel('ID definitions in tables')).not.toBeChecked();
   await sites().getByRole('button', { name: 'Restore ID site defaults', exact: true }).click(); await expect(page.locator('#config-apply')).toBeDisabled();
   await apply(); expect(await saved()).toEqual(config); await expect(page.locator('#metric-ids')).toHaveText('1');
 });
@@ -58,15 +59,15 @@ test('heading levels, disabled sites, Cancel and Restore defaults preserve unrel
 test('category definition sites override the complete project block, persist, rename and restore inheritance', async () => {
   const categorySource = '## REQ-1 heading\n## DD-1 heading\n\n| Requirement | Text |\n| --- | --- |\n| REQ-2 | DD-1 |\n';
   await writeFile(path.join(project, 'a.md'), categorySource); await page.locator('#refresh').click();
-  await open(); await sites().getByLabel('Enable table definitions').uncheck();
+  await open(); await sites().getByLabel('ID definitions in tables').uncheck();
   await page.getByRole('tab', { name: 'Categories', exact: true }).click();
   const requirement = page.locator('#config-categories > details').filter({ has: page.locator(':scope > summary').filter({ hasText: 'Requirements' }) });
   await requirement.locator(':scope > summary').click();
   const local = requirement.locator('.config-category-definition-sites'); await local.locator(':scope > summary').click();
   await local.getByLabel('Category definition sites', { exact: true }).selectOption('override');
-  await expect(local.getByLabel('Enable heading definitions')).toHaveCSS('width', '16px');
-  await expect(local.getByLabel('Enable heading definitions')).toHaveCSS('height', '16px');
-  await local.getByLabel('Enable heading definitions').uncheck(); await local.getByLabel('Enable table definitions').check();
+  await expect(local.getByLabel('ID definitions in headings')).toHaveCSS('width', '13px');
+  await expect(local.getByLabel('ID definitions in headings')).toHaveCSS('height', '13px');
+  await local.getByLabel('ID definitions in headings').uncheck(); await local.getByLabel('ID definitions in tables').check();
   await local.getByLabel('ID column name', { exact: true }).fill('Requirement');
   await preview(); await expect(page.locator('#config-summary')).toContainText('2 definitions');
   await expect(page.locator('#config-changes')).toContainText('1 definitions become references');
@@ -78,7 +79,7 @@ test('category definition sites override the complete project block, persist, re
   const reopened = page.locator('#config-categories > details').filter({ has: page.locator(':scope > summary').filter({ hasText: 'Requirements' }) });
   await reopened.locator(':scope > summary').click(); const reopenedLocal = reopened.locator('.config-category-definition-sites'); await reopenedLocal.locator(':scope > summary').click();
   await expect(reopenedLocal.getByLabel('Category definition sites', { exact: true })).toHaveValue('override');
-  await expect(reopenedLocal.getByLabel('Enable heading definitions')).not.toBeChecked(); await expect(reopenedLocal.getByLabel('ID column name', { exact: true })).toHaveValue('Requirement');
+  await expect(reopenedLocal.getByLabel('ID definitions in headings')).not.toBeChecked(); await expect(reopenedLocal.getByLabel('ID column name', { exact: true })).toHaveValue('Requirement');
   await reopened.getByLabel('Name', { exact: true }).fill('Renamed requirements'); await reopenedLocal.getByRole('button', { name: 'Restore inheritance', exact: true }).click();
   await expect(reopenedLocal.getByLabel('Category definition sites', { exact: true })).toHaveValue('inherit'); await apply();
   stored = await saved(); expect(stored.categories[0].name).toBe('Renamed requirements'); expect(stored.categories[0].idDefinitionSites).toBeUndefined();
@@ -87,19 +88,19 @@ test('category definition sites override the complete project block, persist, re
 test('list definition sites preview exact category transitions, persist types and restore inheritance', async () => {
   const listSource = ['- **REQ-1**: first requirement references DD-1', '', '1. REQ-2: numbered requirement', '', '- DD-1: design record', ''].join(String.fromCharCode(10));
   await writeFile(path.join(project, 'a.md'), listSource); await page.locator('#refresh').click(); await open();
-  await sites().getByLabel('Enable list definitions').check(); await sites().getByLabel('Numbered lists').uncheck();
+  await sites().getByLabel('ID definitions in lists').check(); await sites().getByText('ID definitions in lists', { exact: true }).click(); await sites().getByLabel('Numbered lists').uncheck();
   await preview(); await expect(page.locator('#config-summary')).toContainText('2 definitions');
   await expect(page.locator('#config-changes')).toContainText('2 references become definitions'); await page.locator('#config-apply').click();
   await expect(card('REQ-1')).toBeVisible(); await expect(card('DD-1')).toBeVisible(); await expect(card('REQ-2')).toHaveCount(0);
   await card('REQ-1').locator('.lens-row').click(); await expect(page.locator('#cursor-status')).toContainText('Ln 1');
   let stored = await saved(); expect(stored.idDefinitionSites.lists).toEqual({ enabled: true, types: ['unordered'], mode: 'start' });
 
-  await close(); await launch(); await open(); await expect(sites().getByLabel('Enable list definitions')).toBeChecked(); await expect(sites().getByLabel('Numbered lists')).not.toBeChecked();
+  await close(); await launch(); await open(); await expect(sites().getByLabel('ID definitions in lists')).toBeChecked(); await expect(sites().getByLabel('Numbered lists')).not.toBeChecked();
   await page.getByRole('tab', { name: 'Categories', exact: true }).click();
   const requirement = page.locator('#config-categories > details').filter({ has: page.locator(':scope > summary').filter({ hasText: 'Requirements' }) });
   await requirement.locator(':scope > summary').click(); const local = requirement.locator('.config-category-definition-sites'); await local.locator(':scope > summary').click();
-  await local.getByLabel('Category definition sites', { exact: true }).selectOption('override'); await local.getByLabel('Enable list definitions').uncheck();
-  await expect(local.getByLabel('Enable list definitions')).toHaveCSS('width', '16px'); await apply(); await expect(card('REQ-1')).toHaveCount(0); await expect(card('DD-1')).toBeVisible();
+  await local.getByLabel('Category definition sites', { exact: true }).selectOption('override'); await local.getByLabel('ID definitions in lists').uncheck();
+  await expect(local.getByLabel('ID definitions in lists')).toHaveCSS('width', '13px'); await apply(); await expect(card('REQ-1')).toHaveCount(0); await expect(card('DD-1')).toBeVisible();
   await page.locator('#project-config-open').click(); await page.getByRole('tab', { name: 'Categories', exact: true }).click();
   const reopened = page.locator('#config-categories > details').filter({ has: page.locator(':scope > summary').filter({ hasText: 'Requirements' }) });
   await reopened.locator(':scope > summary').click(); const reopenedLocal = reopened.locator('.config-category-definition-sites'); await reopenedLocal.locator(':scope > summary').click();
@@ -151,14 +152,16 @@ test('site preview uses unsaved buffers, preserves undo and isolates project swi
   await expect(page.locator('#dirty-indicator')).toHaveText('Save failed'); await open(); await configureAnywhere(); await preview(); await expect(page.locator('#config-summary')).toContainText('4 definitions');
   await page.locator('#config-apply').click(); await expect(page.locator('#project-configuration-dialog')).not.toBeVisible(); await expect(card('REQ-3')).toBeVisible();
   expect(await readFile(path.join(project, 'a.md'), 'utf8')).toBe(source); await page.locator('#editor .cm-content').click(); await page.keyboard.press('Control+z'); await expect(card('REQ-3')).toHaveCount(0);
-  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-9 Other\n## Login (REQ-8)\n');
+  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-9 Other\n## Login (REQ-8)\n'); await seedLegacyConfiguration(other);
   await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other);
   await page.locator('#open-project').click(); await expect(page.locator('#project-heading')).toHaveText('other'); await expect(page.locator('#metric-ids')).toHaveText('1'); await expect(card('REQ-8')).toHaveCount(0);
 });
 
 test('site controls support keyboard, themes and minimum window', async () => {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1120, 720)); await open();
-  const enabled = sites().getByLabel('Enable heading definitions'); await enabled.focus(); await page.keyboard.press('Space'); await expect(enabled).not.toBeChecked();
+  const enabled = sites().getByLabel('ID definitions in headings'); await enabled.focus(); await page.keyboard.press('Space'); await expect(enabled).not.toBeChecked();
+  await expect(sites().getByLabel('ID position in heading', { exact: true })).toBeDisabled(); await expect(sites().getByLabel('H2', { exact: true })).toBeDisabled();
+  await page.keyboard.press('Space'); await expect(enabled).toBeChecked(); await expect(sites().getByLabel('ID position in heading', { exact: true })).toBeEnabled();
   await sites().getByLabel('ID position in heading', { exact: true }).selectOption('regex'); await sites().getByLabel('Heading ID pattern', { exact: true }).fill('(?<id>REQ-\\d+)');
   await sites().scrollIntoViewIfNeeded(); await page.screenshot({ path: 'test-results/definition-sites-dark.png' });
   expect(await page.locator('#project-configuration-dialog').evaluate(e => e.getBoundingClientRect().bottom <= innerHeight)).toBe(true);

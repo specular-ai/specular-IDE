@@ -17,6 +17,30 @@ await build({ absWorkingDir: relationshipsProject, entryPoints: ['src/index.ts']
 execFileSync(process.execPath, [path.join(relationshipsProject, 'node_modules/@specular/plugin-api/bin/validate.mjs'), relationshipsProject], { cwd: relationshipsProject, stdio: 'inherit' });
 assert.doesNotMatch(await readFile(path.join(relationshipsProject, 'dist/index.js'), 'utf8'), /(?:from\s+|import\s*\()['"]/);
 console.log(`Independent bundled Relationships build passed: ${relationshipsProject}`);
+// Increment 93: the feature dossier builds the same way, against the packed SDK only.
+const dossierProject = await mkdtemp(path.join(tmpdir(), 'specular-dossier-sdk-'));
+await cp(path.join(root, 'bundled-plugins/feature-dossier'), dossierProject, { recursive: true });
+const dossierMetadata = JSON.parse(await readFile(path.join(dossierProject, 'package.json'), 'utf8'));
+dossierMetadata.devDependencies = {};
+await writeFile(path.join(dossierProject, 'package.json'), JSON.stringify(dossierMetadata));
+execFileSync(process.execPath, [process.env.npm_execpath, 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--save-dev', path.join(root, '.cache/plugin-sdk/specular-plugin-api-0.2.0.tgz')], { cwd: dossierProject, stdio: 'inherit' });
+execFileSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: dossierProject, stdio: 'inherit' });
+await build({ absWorkingDir: dossierProject, entryPoints: ['src/index.ts'], outfile: 'dist/index.js', bundle: true, platform: 'browser', format: 'esm', target: 'es2022' });
+execFileSync(process.execPath, [path.join(dossierProject, 'node_modules/@specular/plugin-api/bin/validate.mjs'), dossierProject], { cwd: dossierProject, stdio: 'inherit' });
+assert.doesNotMatch(await readFile(path.join(dossierProject, 'dist/index.js'), 'utf8'), /(?:from\s+|import\s*\()['"]/);
+console.log(`Independent bundled Feature dossier build passed: ${dossierProject}`);
+// Increment 95b: and so does the Agent activity view.
+const activityProject = await mkdtemp(path.join(tmpdir(), 'specular-activity-sdk-'));
+await cp(path.join(root, 'bundled-plugins/agent-activity'), activityProject, { recursive: true });
+const activityMetadata = JSON.parse(await readFile(path.join(activityProject, 'package.json'), 'utf8'));
+activityMetadata.devDependencies = {};
+await writeFile(path.join(activityProject, 'package.json'), JSON.stringify(activityMetadata));
+execFileSync(process.execPath, [process.env.npm_execpath, 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--save-dev', path.join(root, '.cache/plugin-sdk/specular-plugin-api-0.2.0.tgz')], { cwd: activityProject, stdio: 'inherit' });
+execFileSync(process.execPath, [path.join(root, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: activityProject, stdio: 'inherit' });
+await build({ absWorkingDir: activityProject, entryPoints: ['src/index.ts'], outfile: 'dist/index.js', bundle: true, platform: 'browser', format: 'esm', target: 'es2022' });
+execFileSync(process.execPath, [path.join(activityProject, 'node_modules/@specular/plugin-api/bin/validate.mjs'), activityProject], { cwd: activityProject, stdio: 'inherit' });
+assert.doesNotMatch(await readFile(path.join(activityProject, 'dist/index.js'), 'utf8'), /(?:from\s+|import\s*\()['"]/);
+console.log(`Independent bundled Agent activity build passed: ${activityProject}`);
 // Exercise the public scope contract with opaque keys unrelated to the host's encoding.
 await build({ absWorkingDir: relationshipsProject, stdin: { contents: "export { projectIndex } from './src/model.ts'; export { buildDependencyGraph } from './src/dependencies.ts'; export { keyLabel } from './src/id-identity.ts';", resolveDir: relationshipsProject }, outfile: 'scope-check.mjs', bundle: true, platform: 'node', format: 'esm' });
 const scoped = await import(pathToFileURL(path.join(relationshipsProject, 'scope-check.mjs')).href);

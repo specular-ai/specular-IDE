@@ -1,14 +1,17 @@
-import { previewFolderGenerators, stageFolderUpdate } from '../core/folder-generators';
+import { measureSpecFolders, previewFolderGenerators, stageFolderUpdate } from '../core/folder-generators';
 import { discoverIds } from '../core/id-discovery';
+import { toolFolders } from '../core/excluded-paths';
 import { classifyDiscoveryCategory } from '../core/discovery-category-classification';
 import { overridesForCategories } from '../core/category-overrides';
 import { indexProject, type DocumentCache } from '../core/project-index';
-import { LEGACY_ID_CONFIGURATION, matchesIds, ruleRegex, validateIdConfiguration } from '../core/id-configuration';
+import { analyzedDocuments, LEGACY_ID_CONFIGURATION, matchesIds, ruleRegex, validateIdConfiguration } from '../core/id-configuration';
 import type { IndexRequest } from '../core/index-worker';
 const cache: DocumentCache = new Map();
 let configurationRevision: string | undefined;
 self.onmessage = (event: MessageEvent<IndexRequest>) => {
-  const { revision, documents, configuration } = event.data;
+  const { revision, configuration } = event.data;
+  // Increment 99a: excluded paths take no part in discovery, folder previews, or the index.
+  const documents = analyzedDocuments(event.data.documents, configuration);
   try {
     if (event.data.removeCategoryKeys) {
       if (!configuration) throw new Error('Category removal needs a configuration draft.');
@@ -25,7 +28,19 @@ self.onmessage = (event: MessageEvent<IndexRequest>) => {
       }).map(item => item.rule.category)) }, proposal.suggestions));
       self.postMessage({ revision, classifications }); return;
     }
-    if (event.data.discover) { self.postMessage({ revision, inventory: discoverIds(documents) }); return; }
+    if (event.data.discover) {
+      const inventory = discoverIds(documents, event.data.profiles), folders = inventory.layout?.specFolders;
+      // Increment 99a: tool folders still analyzed are proposed for exclusion, with what each adds under the current draft.
+      const tools = toolFolders(Object.keys(documents));
+      let draftIndex: ReturnType<typeof indexProject> | undefined;
+      const measured = () => { if (!draftIndex) draftIndex = indexProject(documents, configuration, new Map()); return draftIndex; };
+      if (tools.length) { try { inventory.toolFolders = toolFolders(Object.keys(documents), measured()); } catch { inventory.toolFolders = tools; } }
+      // Increment 96: how many defined IDs each spec folder would receive under the current draft.
+      if (folders?.length && configuration) {
+        try { measureSpecFolders(folders, Object.keys(documents), measured(), configuration); } catch { /* counts stay unknown */ }
+      }
+      self.postMessage({ revision, inventory }); return;
+    }
     if (configurationRevision !== event.data.configurationRevision) { cache.clear(); configurationRevision = event.data.configurationRevision; }
     const index = { ...indexProject(documents, configuration, cache), configurationRevision };
     if (event.data.updateFolders) {

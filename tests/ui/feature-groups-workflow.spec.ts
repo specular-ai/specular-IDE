@@ -41,12 +41,12 @@ test('discover scoped FR lists, configure and apply folder memberships, browse f
     features: [{ key: 'review', name: 'Review' }], featureRules: [{ key: 'review', scope: 'folder', path: 'spec/loans', features: ['review'] }] }));
   for (const [file, text] of Object.entries(sources)) { await mkdir(path.dirname(path.join(project, file)), { recursive: true }); await writeFile(path.join(project, file), text); }
   await launch(); await expect(page.locator('#metric-ids')).toHaveText('1');
-  await open(); await expandDiscoveryMethods(page); await page.getByRole('button', { name: 'Discover by patterns', exact: true }).click();
+  await open(); await expandDiscoveryMethods(page); await page.getByRole('button', { name: 'Run heuristic discovery', exact: true }).click();
   await expect(page.locator('#discovery-remaining')).toHaveText('1 suggestions remaining');
   const candidate = page.locator('#discovery-review > .config-entry'); await candidate.locator(':scope > summary').click();
   await candidate.getByLabel('Category display name', { exact: true }).fill('Functional requirements');
   await candidate.getByText('ID definition sites', { exact: true }).click(); await candidate.getByLabel('Category definition sites', { exact: true }).selectOption('override');
-  await candidate.getByLabel('Enable list definitions').check();
+  await candidate.getByLabel('ID definitions in lists').check();
   await expect(candidate.getByRole('button', { name: 'FR-001 - spec/loans/main.md (list-item)', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Add suggestions to draft', exact: true }).click();
   await page.locator('#config-tab-categories').click();

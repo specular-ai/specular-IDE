@@ -3,6 +3,8 @@ import test from 'node:test';
 import { analyzeDocument, buildIndex } from '../src/core/documents';
 import { compileIdMatcher, LEGACY_ID_CONFIGURATION, type IdConfiguration } from '../src/core/id-configuration';
 import { assignModules } from '../src/core/modules';
+import { effectiveLayers } from '../src/core/layers';
+import { validateIdConfiguration } from '../src/core/id-configuration';
 import { buildDependencyGraph as coreGraph } from '../src/core/dependencies';
 import { relationshipsFor as coreRelationships } from '../src/core/relationships';
 import { modelsFor } from '../src/renderer/plugin-models';
@@ -17,7 +19,8 @@ const position = (o: { file: string; offset: number; end: number }) => `${o.file
 
 /** Specular's own graph and the plugin's graph built from the broker-validated project model must agree exactly. */
 function assertSameRelationships(documents: Record<string, string>, configuration: IdConfiguration) {
-  const index = assignModules(buildIndex(Object.entries(documents).map(([file, text]) => analyzeDocument(file, text, compileIdMatcher(configuration)))), configuration);
+  // The effective layers, as indexProject attaches them (100b).
+  const index = { ...assignModules(buildIndex(Object.entries(documents).map(([file, text]) => analyzeDocument(file, text, compileIdMatcher(configuration)))), configuration), layers: effectiveLayers(configuration) };
   const models = modelsFor({ projectId: 'internal', revision: 1, ready: true, notice: '', documents, configuration, folders: [], files: [], index, warnings: [] });
   const parsed = parseRequest(JSON.stringify({ apiVersion: API_VERSION, requestId: 'r', viewId: 'overview', context: { projectId: 'opaque', revision: 1 }, models }), manifest);
   const local = projectIndex(parsed.models);
@@ -63,4 +66,14 @@ test('folder-scoped IDs keep links inside their scope', () => {
     assert.equal(from.scope, to.scope, `${link.from} -> ${link.to}`);
   }
   assert.equal(models.project.relationships.length, 4);
+});
+
+test('configured layers, including a category without a role, give the same connections in Specular and the abstraction (100b)', () => {
+  const configuration = validateIdConfiguration({ version: 1, categories: [
+    { key: 'story', name: 'User story', role: 'requirement' }, { key: 'task', name: 'Task', role: 'task' }, { key: 'test', name: 'Test' },
+  ], rules: [{ key: 'story', category: 'story', prefix: 'US' }, { key: 'task', category: 'task', prefix: 'T' }, { key: 'test', category: 'test', prefix: 'ZS' }],
+  layers: [{ name: 'Needs', categories: ['story'] }, { name: 'Work', categories: ['task'] }, { name: 'Tests', categories: ['test'] }] });
+  const { models } = assertSameRelationships({ 'specs.md': ['# US-1 Sign in', '', '# T-1 Build', 'For US-1, tested by ZS-1 and ZS-2.', '', '# ZS-1 Test', 'Covers US-1.', ''].join('\n') }, configuration);
+  assert.deepEqual(models.project.configuration.layers?.map(layer => layer.name), ['Needs', 'Work', 'Tests']);
+  assert.deepEqual(pluginRelationships(projectIndex(models as never), 'T-1').groups.map(group => group.id), ['US-1', 'ZS-1', 'ZS-2']);
 });

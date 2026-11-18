@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { analyzeDocument, buildIndex } from '../src/core/documents';
-import { relationshipsFor, relatedThroughDecisions, supportsRelationships } from '../src/core/relationships';
+import { relationshipsFor, relatedThroughNeighbours, supportsRelationships } from '../src/core/relationships';
 
 const model = (text: string) => analyzeDocument('spec.md', text);
 const refs = (text: string) => model(text).occurrences.filter(item => item.kind === 'reference').map(item => [item.id, item.owner?.id]);
@@ -31,12 +31,13 @@ test('Mermaid evidence uses the owning section and exact multiline CRLF position
   for (const item of references) { assert.equal(item.owner?.id, 'DD-001'); assert.equal(text.slice(item.offset, item.end), item.id); assert.ok(item.label.includes(item.id)); }
 });
 
-test('groups each REQ/DD pair once, retains both authored directions and every evidence passage, excludes other pairs', () => {
+test('groups each connected pair once, retains both authored directions and every evidence passage, excludes self-mentions and IDs in no layer', () => {
   const index = buildIndex([model('# REQ-001\nDD-001 and REQ-001.\n# DD-001\nREQ-001 and REQ-001, DD-001, DD-002, PH-001.\n# General\nREQ-001\n')]);
   const result = relationshipsFor(index, 'REQ-001'); assert.equal(result.definitionCount, 1); assert.equal(result.groups.length, 1);
   const group = result.groups[0]; assert.equal(group.id, 'DD-001'); assert.equal(group.definition?.id, 'DD-001'); assert.equal(group.evidence.length, 3);
   assert.deepEqual(group.evidence.map(item => [item.from, item.to]), [['REQ-001', 'DD-001'], ['DD-001', 'REQ-001'], ['DD-001', 'REQ-001']]);
-  assert.equal(relationshipsFor(index, 'DD-001').groups[0].id, 'REQ-001'); assert.equal(relationshipsFor(index, 'PH-001').groups.length, 0);
+  // 100a: a link within a layer (DD-001 to DD-002) is a connection; the self-mention and PH-001 (no role, so no layer) are not.
+  assert.deepEqual(relationshipsFor(index, 'DD-001').groups.map(item => item.id), ['DD-002', 'REQ-001']); assert.equal(relationshipsFor(index, 'PH-001').groups.length, 0);
   assert.equal(index.references.filter(item => item.id === 'REQ-001').length, 4);
 });
 
@@ -75,15 +76,16 @@ const taskFiles = {
   'tasks.md': '# TASK-001 - Completed (authored)\nDD-001 and DD-001, REQ-001, TASK-002.\n\n| ID | Work |\n| --- | --- |\n| TASK-002 | DD-001 and DD-002 |\n| TASK-003 | Unlinked |\n\n# Notes\nTASK-999 unowned.\n',
 };
 const taskIndex = () => buildIndex(Object.entries(taskFiles).map(([file, text]) => analyzeDocument(file, text)));
-test('authored heading and table tasks preserve both hops, repeated evidence and reverse browsing without adding direct TASK/REQ pairs', () => {
+test('authored heading and table tasks preserve both hops, repeated evidence and reverse browsing, and add the direct TASK/REQ and TASK/TASK links', () => {
   const index = taskIndex();
   const direct = relationshipsFor(index, 'REQ-001').groups;
-  const through = relatedThroughDecisions(index, 'REQ-001', direct);
+  const through = relatedThroughNeighbours(index, 'REQ-001', direct);
   assert.deepEqual(through.map(item => item.id), ['TASK-001', 'TASK-002', 'TASK-404']);
   assert.equal(through[0].anchor, 'DD-001'); assert.equal(through[0].evidence.length, 3);
   assert.deepEqual(through[0].evidence.map(item => item.from), ['DD-001', 'TASK-001', 'TASK-001']);
-  assert.deepEqual(relationshipsFor(index, 'TASK-001').groups.map(item => item.id), ['DD-001']);
-  assert.deepEqual(relatedThroughDecisions(index, 'TASK-001', relationshipsFor(index, 'TASK-001').groups).map(item => item.id), ['REQ-001', 'REQ-002']);
+  // 100a: TASK-001 cites REQ-001 and TASK-002 directly; the second hop through DD-001 is unchanged.
+  assert.deepEqual(relationshipsFor(index, 'TASK-001').groups.map(item => item.id), ['DD-001', 'REQ-001', 'TASK-002']);
+  assert.deepEqual(relatedThroughNeighbours(index, 'TASK-001', relationshipsFor(index, 'TASK-001').groups).map(item => item.id), ['REQ-001', 'REQ-002']);
   assert.equal(index.definitions.find(item => item.id === 'TASK-002')?.line, 6);
   assert.equal(relationshipsFor(index, 'TASK-003').groups.length, 0);
   assert.equal(index.references.find(item => item.id === 'TASK-999')?.owner, undefined);
@@ -96,18 +98,18 @@ test('authored heading and table tasks preserve both hops, repeated evidence and
 test('task paths do not expand missing or duplicate intermediates or an ambiguous focus; filters apply to every hop', () => {
   const index = taskIndex();
   const direct = relationshipsFor(index, 'REQ-001').groups;
-  assert.deepEqual(relatedThroughDecisions(index, 'REQ-001', direct, 'tasks.md').map(item => item.id), ['TASK-001', 'TASK-002']);
+  assert.deepEqual(relatedThroughNeighbours(index, 'REQ-001', direct, 'tasks.md').map(item => item.id), ['TASK-001', 'TASK-002']);
   index.definitions.push({ ...index.definitions.find(item => item.id === 'DD-001')! });
-  assert.equal(relatedThroughDecisions(index, 'REQ-001', relationshipsFor(index, 'REQ-001').groups).length, 0);
+  assert.equal(relatedThroughNeighbours(index, 'REQ-001', relationshipsFor(index, 'REQ-001').groups).length, 0);
   index.definitions.pop();
   index.definitions.push({ ...index.definitions.find(item => item.id === 'TASK-001')! });
-  assert.equal(relatedThroughDecisions(index, 'TASK-001', relationshipsFor(index, 'TASK-001').groups).length, 0);
+  assert.equal(relatedThroughNeighbours(index, 'TASK-001', relationshipsFor(index, 'TASK-001').groups).length, 0);
   assert.equal(relationshipsFor(index, 'DD-001').groups.find(item => item.id === 'TASK-001')?.definition, undefined);
 });
 test('task edits refresh links and duplicate diagnostics without changing the earlier snapshot', () => {
   const before = taskIndex();
   const edited = buildIndex(Object.entries({ ...taskFiles, 'tasks.md': '# TASK-001\nDD-002.\n# TASK-001\nDuplicate.\n' }).map(([file, text]) => analyzeDocument(file, text)));
-  assert.equal(relationshipsFor(before, 'TASK-001').groups.length, 1);
+  assert.equal(relationshipsFor(before, 'TASK-001').groups.length, 3);
   assert.equal(relationshipsFor(edited, 'TASK-001').groups.length, 2);
   assert.equal(edited.findings.filter(item => item.kind === 'duplicate' && item.message.includes('TASK-001')).length, 2);
 });
@@ -128,7 +130,7 @@ test('configured roles drive Focus and category grouping without prefix assumpti
   assert.equal(supportsRelationships('REQ-1', index), false);
   const direct = relationshipsFor(index, 'REF-01');
   assert.deepEqual(direct.groups.map(g => g.id), ['DEC_1']);
-  assert.deepEqual(relatedThroughDecisions(index, 'REF-01', direct.groups).map(g => [g.id, g.definitionCount]), [['WORK-1', 1], ['WORK-404', 0]]);
+  assert.deepEqual(relatedThroughNeighbours(index, 'REF-01', direct.groups).map(g => [g.id, g.definitionCount]), [['WORK-1', 1], ['WORK-404', 0]]);
   assert.deepEqual(relationshipsFor(index, 'DEC_1').groups.map(g => g.id), ['NEED02', 'REF-01', 'WORK-1', 'WORK-404']);
   const graph = buildDependencyGraph(index);
   assert.equal(graph.nodes.get('REF-01')?.kind, 'needs'); assert.equal(graph.nodes.get('NEED02')?.kind, 'needs');
@@ -138,9 +140,21 @@ test('configured roles drive Focus and category grouping without prefix assumpti
   assert.deepEqual(relationshipsFor(changed, 'REF-01').groups, []);
   const duplicate = buildIndex([analyzeDocument('custom.md', '# REF-01\nDEC_1\n# DEC_1\nWORK-1\n# DEC_1\nWORK-1', compileIdMatcher(configured))]);
   assert.equal(relationshipsFor(duplicate, 'REF-01').groups[0].definitionCount, 2);
-  assert.deepEqual(relatedThroughDecisions(duplicate, 'REF-01', relationshipsFor(duplicate, 'REF-01').groups), []);
+  assert.deepEqual(relatedThroughNeighbours(duplicate, 'REF-01', relationshipsFor(duplicate, 'REF-01').groups), []);
 });
 test('context-dependent rules cannot assign conflicting categories to the same ID', () => {
   const config: IdConfiguration = { ...configured, rules: [{ key: 'first', category: 'needs', pattern: '(?<=A )REF-1' }, { key: 'second', category: 'notes', pattern: '(?<=B )REF-1' }] };
   assert.throws(() => buildIndex([analyzeDocument('custom.md', 'A REF-1\nB REF-1', compileIdMatcher(config))]), /conflicting categories/);
+});
+test('without design decisions, tasks connect directly to their stories and the second hop stays within the layers in use (100a)', () => {
+  const stories: IdConfiguration = { version: 1, categories: [
+    { key: 'story', name: 'User story', role: 'requirement' }, { key: 'task', name: 'Task', role: 'task' }, { key: 'test', name: 'Test' },
+  ], rules: [{ key: 'story', category: 'story', prefix: 'US' }, { key: 'task', category: 'task', prefix: 'T' }, { key: 'test', category: 'test', prefix: 'ZS' }] };
+  const index = buildIndex([analyzeDocument('specs.md', '# US-1 Sign in\n\n# US-2 Sign out\n\n# T-1 Build the form\nFor US-1, tested by ZS-1.\n\n# T-2 Add sign-out\nFor US-2 after T-1.\n', compileIdMatcher(stories))]);
+  assert.equal(supportsRelationships('US-1', index), true); assert.equal(supportsRelationships('ZS-1', index), false);
+  assert.deepEqual(relationshipsFor(index, 'US-1').groups.map(group => [group.id, group.evidence.map(item => `${item.from}>${item.to}`)]), [['T-1', ['T-1>US-1']]]);
+  assert.deepEqual(relationshipsFor(index, 'T-2').groups.map(group => group.id), ['T-1', 'US-2']);
+  // From US-1 through T-1 (a later layer) nothing lies further on; from T-2 through T-1 (same layer) there is no direction to continue.
+  assert.deepEqual(relatedThroughNeighbours(index, 'US-1', relationshipsFor(index, 'US-1').groups), []);
+  assert.deepEqual(relatedThroughNeighbours(index, 'T-2', relationshipsFor(index, 'T-2').groups), []);
 });

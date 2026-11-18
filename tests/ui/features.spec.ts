@@ -41,7 +41,6 @@ test.afterEach(async ({}, info) => { if (info.status !== info.expectedStatus) aw
 test('features tab follows modules; scoped memberships persist through rename, deletion, clearing and restart', async () => {
   await create();
   const header = page.locator('#config-features > .config-section-heading');
-  await expect(header.getByRole('heading', { name: 'Application features', exact: true })).toBeVisible();
   await expect(header.getByRole('button', { name: 'Add feature', exact: true })).toBeVisible();
   const tabs = await page.getByRole('tab').allTextContents(); expect(tabs[tabs.indexOf('Application modules') + 1]).toBe('Application features');
   await page.getByRole('tab', { name: 'Application modules', exact: true }).click(); await page.keyboard.press('ArrowRight');

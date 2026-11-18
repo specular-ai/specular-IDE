@@ -27,20 +27,23 @@ test.afterEach(async ({}, info) => {
   if (app) { await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(w => w.destroy())).catch(() => {}); await app.close().catch(() => {}); }
 });
 
-test('Discover by patterns proposes keyword headings, a parent, capabilities, and changes that apply as one configuration', async () => {
+test('Discover by patterns proposes keyword headings, a parent, capabilities, changes, and capability features that apply as one configuration', async () => {
   await expect(async () => {
     if (!await dialog().isVisible()) await page.locator('#project-config-open').click();
-    await expect(page.getByRole('tab', { name: 'Discover IDs', exact: true })).toHaveAttribute('aria-selected', 'true', { timeout: 300 });
+    await expect(page.getByRole('tab', { name: 'Discover', exact: true })).toHaveAttribute('aria-selected', 'true', { timeout: 300 });
   }).toPass({ timeout: 10000 });
   await expandDiscoveryMethods(page);
-  await page.getByRole('button', { name: 'Discover by patterns', exact: true }).click();
+  await page.getByRole('button', { name: 'Run heuristic discovery', exact: true }).click();
   await expect(page.locator('#discovery-status')).toContainText('Found 4 candidate groups');
+  // Increment 96: the capability folders are also proposed as folder-derived features.
+  await expect(page.locator('#discovery-status')).toContainText('Found 1 folder-derived feature suggestion.');
   await suggestion('Scenario').locator(':scope > summary').click();
   await expect(suggestion('Scenario')).toContainText('Keyword heading: "Scenario: <name>" at level 4. Identified within its Requirement heading.');
   await expect(suggestion('Scenario').getByLabel('Suggested regex', { exact: true })).toHaveCount(0);
   await suggestion('Change').locator(':scope > summary').click();
   await expect(suggestion('Change')).toContainText('proposals declare Capability elements');
   await page.getByRole('button', { name: 'Add suggestions to draft', exact: true }).click();
+  await expect(page.locator('#discovery-status')).toContainText('Added 1 folder pattern (openspec/specs/*) with 2 new features.');
   await page.locator('#config-preview').click(); await expect(page.locator('#config-status')).toContainText('Preview ready');
   // 4 requirements (one proposed by the active change), 3 scenarios, 2 capabilities, and 2 changes; nothing duplicated or unresolved.
   await expect(page.locator('#config-summary')).toContainText('11 definitions');
@@ -51,5 +54,6 @@ test('Discover by patterns proposes keyword headings, a parent, capabilities, an
   expect(named('Scenario').parent).toBe(named('Requirement').key);
   expect(named('Requirement')).toMatchObject({ deltas: true, idDefinitionSites: { headings: { mode: 'keyword', keyword: 'Requirement' } } });
   expect(named('Change').changes).toEqual({ capabilities: named('Capability').key });
+  expect(saved.features.map((item: { name: string }) => item.name)).toEqual(['billing', 'identity']);
   for (const [file, text] of Object.entries(files)) expect(await readFile(path.join(project, file), 'utf8')).toBe(text);
 });

@@ -1,0 +1,138 @@
+{
+  "schema": 1,
+  "id": "trae",
+  "tool": "Trae",
+  "versions": "Trae spec mode: .trae/specs/<name>/ with spec.md, tasks.md, and checklist.md (2025-2026)",
+  "description": "Tasks and subtasks of each spec's tasks.md, numbered per spec folder and defined by their checkbox items or task headings.",
+  "applies": {
+    "folders": "**/.trae/specs/*"
+  },
+  "detectors": [
+    {
+      "id": "tasks",
+      "kind": "matching-lines",
+      "files": [
+        "**/.trae/specs/*/tasks.md"
+      ],
+      "pattern": "^(Task \\d+)\\b(?!\\.\\d)",
+      "checkboxOnly": true,
+      "min": 3
+    },
+    {
+      "id": "subtasks",
+      "kind": "matching-lines",
+      "files": [
+        "**/.trae/specs/*/tasks.md"
+      ],
+      "pattern": "^(SubTask \\d+\\.\\d+)\\b",
+      "checkboxOnly": true,
+      "min": 3
+    }
+  ],
+  "proposals": [
+    {
+      "detector": "tasks",
+      "join": "category",
+      "create": {
+        "key": "trae-task",
+        "name": "Task",
+        "role": "task",
+        "idScopes": [
+          "**/.trae/specs/*"
+        ],
+        "definitionPaths": [
+          "**/.trae/specs/*/tasks.md"
+        ]
+      },
+      "rule": {
+        "key": "trae-task",
+        "pattern": "\\bTask \\d+\\b(?!\\.\\d)"
+      },
+      "idDefinitionSites": {
+        "headings": {
+          "enabled": true,
+          "levels": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "mode": "anywhere"
+        },
+        "tables": {
+          "enabled": false,
+          "column": "ID",
+          "mode": "exact"
+        },
+        "lists": {
+          "enabled": true,
+          "types": [
+            "unordered",
+            "ordered"
+          ],
+          "mode": "start",
+          "checkboxOnly": true
+        }
+      },
+      "uncertainty": [
+        {
+          "text": "{{count}} task items or headings in {{files}} tasks.md files of Trae specs (.trae/specs/<name>/). Numbers restart in each spec folder, so each folder is its own scope; checkbox items and task headings in tasks.md define them, and lines such as \"Task 2 depends on Task 1\" cite them."
+        }
+      ]
+    },
+    {
+      "detector": "subtasks",
+      "join": "category",
+      "create": {
+        "key": "trae-subtask",
+        "name": "Subtask",
+        "role": "task",
+        "idScopes": [
+          "**/.trae/specs/*"
+        ],
+        "definitionPaths": [
+          "**/.trae/specs/*/tasks.md"
+        ]
+      },
+      "rule": {
+        "key": "trae-subtask",
+        "pattern": "\\bSubTask \\d+\\.\\d+\\b"
+      },
+      "idDefinitionSites": {
+        "headings": {
+          "enabled": false,
+          "levels": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6
+          ],
+          "mode": "start"
+        },
+        "tables": {
+          "enabled": false,
+          "column": "ID",
+          "mode": "exact"
+        },
+        "lists": {
+          "enabled": true,
+          "types": [
+            "unordered",
+            "ordered"
+          ],
+          "mode": "start",
+          "checkboxOnly": true
+        }
+      },
+      "uncertainty": [
+        {
+          "text": "{{count}} subtask items in {{files}} tasks.md files of Trae specs (.trae/specs/<name>/), numbered N.M under their task and restarting in each spec folder; their checkbox items define them."
+        }
+      ]
+    }
+  ]
+}

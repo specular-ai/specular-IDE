@@ -1,16 +1,38 @@
 import { currentAppearance } from './appearance';
-import type { PluginManifest, RenderRequest, RenderResult, SourceReference, ViewKind } from '../../packages/plugin-api/src/index';
+import type { ActivityModel, PluginManifest, RenderRequest, RenderResult, SourceReference, ViewKind } from '../../packages/plugin-api/src/index';
 import { API_VERSION } from '../../packages/plugin-api/src/index';
 import { parseResult, validSource } from '../shared/plugin-runtime';
+import { excludedFromAnalysis } from '../core/id-configuration';
 import type { Occurrence } from '../shared/types';
 import { DependencyGraphView } from './dependency-graph';
 import { modelsFor } from './plugin-models';
 import type { ViewContext, ViewRegistry, WorkspaceViewSnapshot } from './abstraction-views';
 
-function requestFor(snapshot: WorkspaceViewSnapshot, projectId: string, viewId: string, extra: Partial<RenderRequest> = {}): RenderRequest {
+function requestFor(snapshot: WorkspaceViewSnapshot, projectId: string, viewId: string, extra: Partial<RenderRequest> = {}, activity?: ActivityModel): RenderRequest {
   return { appearance: currentAppearance(), apiVersion: API_VERSION, requestId: crypto.randomUUID(), viewId,
-    context: { projectId, revision: snapshot.revision, ...(snapshot.currentFile && snapshot.currentFile in snapshot.documents ? { currentFile: snapshot.currentFile } : {}) },
-    models: modelsFor(snapshot), ...extra };
+    context: { projectId, revision: snapshot.revision, ...(snapshot.currentFile && snapshot.currentFile in snapshot.documents && !excludedFromAnalysis(snapshot.currentFile, snapshot.configuration) ? { currentFile: snapshot.currentFile } : {}) },
+    models: { ...modelsFor(snapshot), ...(activity ? { activity } : {}) }, ...extra };
+}
+/**
+ * Increment 95: a view whose plugin declares `activity@1` gets the activity model with each request, and is updated
+ * when the logs change (polled every 10 s while the view is open) or the project's reading switch changes.
+ */
+function activityFeed(manifest: PluginManifest, changed: () => void) {
+  const declared = manifest.models.includes('activity@1');
+  let revision: number | undefined, poll: ReturnType<typeof setInterval> | undefined;
+  const switched = () => { revision = undefined; changed(); };
+  return {
+    async model(): Promise<ActivityModel | undefined> {
+      if (!declared) return;
+      try { const model = await window.specular.activityModel(); revision = model.revision; return model; } catch { return; }
+    },
+    start() {
+      if (!declared || poll) return;
+      window.addEventListener('specular:activity', switched);
+      poll = setInterval(() => { void window.specular.activityModel().then(m => { if (revision !== undefined && m.revision !== revision) changed(); }).catch(() => {}); }, 10_000);
+    },
+    stop() { clearInterval(poll); poll = undefined; window.removeEventListener('specular:activity', switched); },
+  };
 }
 export function registerPluginViews(registry: ViewRegistry, manifest: PluginManifest) {
   const group = `plugin:${manifest.id}`;
@@ -32,7 +54,14 @@ function sourceEvidence(context: ViewContext, source: SourceReference, request: 
 }
 function boundsFor(root: HTMLElement) {
   const bounds = root.getBoundingClientRect();
-  return { x: bounds.left, y: bounds.top, width: bounds.width, height: bounds.height };
+  let { left, top, right, bottom } = bounds;
+  // The native view paints above the page, so clip it to ancestors that clip their content (e.g. above the terminal).
+  for (let parent = root.parentElement; parent; parent = parent.parentElement) {
+    if (getComputedStyle(parent).overflow === 'visible') continue;
+    const clip = parent.getBoundingClientRect();
+    left = Math.max(left, clip.left); top = Math.max(top, clip.top); right = Math.min(right, clip.right); bottom = Math.min(bottom, clip.bottom);
+  }
+  return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
 }
 function createCustomPluginView(root: HTMLElement, context: ViewContext, manifest: PluginManifest, viewId: string) {
   let active = false, disposed = false, running = false, generation = 0, failed = false;
@@ -49,7 +78,10 @@ function createCustomPluginView(root: HTMLElement, context: ViewContext, manifes
     const version = generation, snapshot = context.getSnapshot();
     if (!snapshot.projectId) { status.textContent = 'Open a project first.'; return; }
     if (snapshot.projectId !== internalProject) { internalProject = snapshot.projectId; projectId = crypto.randomUUID(); customState = undefined; }
-    request = requestFor(snapshot, projectId, viewId, { ...(targetId === undefined ? {} : { targetId }), ...(customState === undefined ? {} : { customState }) });
+    running = true;
+    const activity = await feed.model();
+    if (!active || disposed || generation !== version) { running = false; if (active && !disposed) schedule(); return; }
+    request = requestFor(snapshot, projectId, viewId, { ...(targetId === undefined ? {} : { targetId }), ...(customState === undefined ? {} : { customState }) }, activity);
     running = true; status.textContent = 'Opening isolated plugin interface...';
     try {
       await window.specular.renderCustomPlugin(manifest.id, JSON.stringify(request), boundsFor(root));
@@ -63,7 +95,7 @@ function createCustomPluginView(root: HTMLElement, context: ViewContext, manifes
   function schedule() { clearTimeout(timer); if (active) timer = setTimeout(() => void render(), 100); }
   const unwatchFailure = window.specular.onPluginFailure(event => { if (event.id === manifest.id && active && !disposed) { generation++; failed = true; status.textContent = event.message; } });
   const unwatchState = window.specular.onCustomPluginState(event => {
-    if (active && !disposed && request && event.id === manifest.id && event.viewId === viewId && event.requestId === request.requestId && manifest.customApi === 1) customState = event.state;
+    if (active && !disposed && request && event.id === manifest.id && event.viewId === viewId && event.requestId === request.requestId && manifest.customApi !== undefined) customState = event.state;
   });
   const unwatchNavigate = window.specular.onCustomPluginNavigate(event => {
     if (!active || disposed || !request || event.id !== manifest.id || event.viewId !== viewId || event.requestId !== request.requestId) return;
@@ -73,9 +105,10 @@ function createCustomPluginView(root: HTMLElement, context: ViewContext, manifes
   const appearanceChanged = () => { generation++; schedule(); };
   window.addEventListener('specular:appearance', appearanceChanged);
   const unsubscribe = context.onSnapshotChanged(() => { generation++; schedule(); });
-  function stop() { active = false; generation++; clearTimeout(timer); request = undefined; void window.specular.stopPlugin(manifest.id).catch(() => {}); }
+  const feed = activityFeed(manifest, () => { generation++; schedule(); });
+  function stop() { active = false; generation++; clearTimeout(timer); feed.stop(); request = undefined; void window.specular.stopPlugin(manifest.id).catch(() => {}); }
   return {
-    activate(target?: { elementId?: string }) { targetId = target?.elementId; active = true; failed = false; generation++; schedule(); },
+    activate(target?: { elementId?: string }) { targetId = target?.elementId; active = true; failed = false; generation++; feed.start(); schedule(); },
     deactivate: stop,
     reset: stop,
     dispose() { if (disposed) return; stop(); disposed = true; resize.disconnect(); window.removeEventListener('specular:appearance', appearanceChanged); window.removeEventListener('resize', layout); unsubscribe(); unwatchFailure(); unwatchNavigate(); unwatchState(); },
@@ -151,7 +184,10 @@ function createPluginView(root: HTMLElement, context: ViewContext, manifest: Plu
     const version = generation, snapshot = context.getSnapshot();
     if (!snapshot.projectId) { status.textContent = 'Open a project first.'; return; }
     if (snapshot.projectId !== internalProject) { internalProject = snapshot.projectId; projectId = crypto.randomUUID(); }
-    const request = requestFor(snapshot, projectId, viewId, targetId === undefined ? {} : { targetId });
+    running = true;
+    const activity = await feed.model();
+    if (!active || disposed || generation !== version) { running = false; if (active && !disposed) schedule(); return; }
+    const request = requestFor(snapshot, projectId, viewId, targetId === undefined ? {} : { targetId }, activity);
     running = true; status.textContent = 'Updating plugin view...';
     try {
       const raw = await window.specular.renderPlugin(manifest.id, JSON.stringify(request));
@@ -166,9 +202,10 @@ function createPluginView(root: HTMLElement, context: ViewContext, manifest: Plu
   function schedule() { clearTimeout(timer); if (active) timer = setTimeout(() => void render(), 100); }
   const unwatch = window.specular.onPluginFailure(event => { if (event.id === manifest.id && active && !disposed) { generation++; failed = true; clear(); status.textContent = event.message; } });
   const unsubscribe = context.onSnapshotChanged(() => { generation++; clear(); schedule(); });
-  function stop() { active = false; generation++; clearTimeout(timer); clear(); void window.specular.stopPlugin(manifest.id).catch(() => {}); }
+  const feed = activityFeed(manifest, () => { generation++; schedule(); });
+  function stop() { active = false; generation++; clearTimeout(timer); feed.stop(); clear(); void window.specular.stopPlugin(manifest.id).catch(() => {}); }
   return {
-    activate(target?: { elementId?: string }) { targetId = target?.elementId; active = true; failed = false; generation++; schedule(); },
+    activate(target?: { elementId?: string }) { targetId = target?.elementId; active = true; failed = false; generation++; feed.start(); schedule(); },
     deactivate: stop,
     reset: stop,
     dispose() { if (disposed) return; stop(); disposed = true; unsubscribe(); unwatch(); },

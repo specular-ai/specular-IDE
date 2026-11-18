@@ -2,6 +2,7 @@ import { configurationEntry, rememberConfigurationEntries } from './configuratio
 import { DEFAULT_DATE_PATTERN, DEFAULT_DATE_SETTINGS, DEFAULT_STATUS_DATE_PATTERN, excluded, validateDateSettings, type DateKind, type DateRule, type DateSettings, type DateSite } from '../core/dates';
 import type { IdConfiguration } from '../core/id-configuration';
 import type { ProjectIndex, SourceLocation } from '../shared/types';
+import { explain } from './hover-hint';
 
 const SITES: [DateSite, string][] = [['status', 'Status value'], ['list-entry', 'List entry'], ['heading', 'Heading'], ['field', 'Labelled field']];
 const KINDS: [DateKind, string][] = [['entry', 'Recorded entry'], ['milestone', 'Milestone'], ['snapshot', 'Last updated (snapshot)']];
@@ -22,11 +23,8 @@ export class DateRulesEditor {
   constructor(private draft: () => IdConfiguration, private changed: () => void, private folders: () => string[], private open: (location: SourceLocation) => void) {
     this.root.id = 'config-dates';
     const heading = document.createElement('div'); heading.className = 'config-section-heading';
-    const title = document.createElement('h3'); title.textContent = 'Date rules';
     const restore = this.button('Restore default date rules', () => { delete this.draft().dates; this.shown.clear(); this.render(); this.changed(); });
-    restore.id = 'config-dates-restore'; heading.append(title, restore);
-    const hint = document.createElement('p'); hint.className = 'config-hint';
-    hint.textContent = 'Date rules find dates written in Markdown: inside status values, in dated list entries, in headings, and in labelled fields such as **Created**: 2025-12-12. Milestones mark something happening; Last updated snapshots are overwritten on every edit. Preview matches to see which dates each rule finds.';
+    restore.id = 'config-dates-restore'; heading.append(restore);
     const add = document.createElement('div'); add.className = 'config-date-add';
     const site = document.createElement('select'); site.setAttribute('aria-label', 'New date rule site');
     for (const [value, text] of SITES) site.add(new Option(text, value));
@@ -41,7 +39,8 @@ export class DateRulesEditor {
     path.onfocus = () => folderList.replaceChildren(...this.folders().map(folder => new Option(folder, folder)));
     exclusionAdd.append(path, folderList, this.button('Add exclusion', () => { if (!path.value.trim()) return; this.settings().exclude.push(path.value.trim()); path.value = ''; this.render(); this.changed(); }));
     this.list.className = 'config-list config-date-rules'; this.exclusions.className = 'config-date-exclusions'; this.previewArea.id = 'config-date-preview';
-    this.root.append(heading, hint, add, this.list, exclusionTitle, exclusionHint, exclusionAdd, this.exclusions, this.previewArea);
+    explain(exclusionTitle, exclusionHint.textContent!);
+    this.root.append(heading, add, this.list, exclusionTitle, exclusionAdd, this.exclusions, this.previewArea);
   }
   private button(text: string, action: () => void, label = text) {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'quiet-button'; button.textContent = text; button.setAttribute('aria-label', label);
@@ -77,8 +76,9 @@ export class DateRulesEditor {
       const row = document.createElement('div'); row.className = 'config-date-rule'; row.dataset.ruleIndex = String(index);
       const enabled = document.createElement('input'); enabled.type = 'checkbox'; enabled.checked = rule.enabled; enabled.setAttribute('aria-label', `Enable ${this.title({ ...rule, enabled: true })}`);
       // The entry title refreshes on change; re-rendering would replace the control being used.
-      enabled.onchange = () => { target().enabled = enabled.checked; this.changed(); };
-      const toggle = document.createElement('label'); toggle.className = 'config-checkbox'; toggle.append(enabled, 'Enabled');
+      enabled.onchange = () => { target().enabled = enabled.checked; sync(); this.changed(); };
+      // A rule that is off keeps its settings but cannot be edited until it is turned on again.
+      const sync = () => { row.classList.toggle('config-date-off', !enabled.checked); row.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button').forEach(control => { control.disabled = !enabled.checked; }); };
       const site = document.createElement('select'); site.setAttribute('aria-label', 'Date site');
       for (const [value, text] of SITES) site.add(new Option(text, value));
       site.value = rule.site;
@@ -91,7 +91,7 @@ export class DateRulesEditor {
         this.render(); this.changed();
       };
       const field = (text: string, control: HTMLElement) => { const label = document.createElement('label'); label.append(text, control); return label; };
-      row.append(toggle, field('Site', site));
+      row.append(field('Site', site));
       if (rule.site === 'field') {
         const label = document.createElement('input'); label.type = 'text'; label.maxLength = 128; label.spellcheck = false; label.value = rule.label ?? ''; label.setAttribute('aria-label', 'Field label');
         label.oninput = () => { target().label = label.value; this.changed(); this.mark(row, target()); };
@@ -107,22 +107,22 @@ export class DateRulesEditor {
       if (rule.site !== 'list-entry') {
         // Patterns are an advanced setting; most rules only change labels and switches.
         const advanced = document.createElement('details'); advanced.className = 'config-date-advanced';
-        const summary = document.createElement('summary'); summary.textContent = 'Advanced';
+        const summary = explain(document.createElement('summary'), 'The regular expression this rule uses to read dates.'); summary.textContent = 'Advanced';
         const pattern = document.createElement('input'); pattern.type = 'text'; pattern.maxLength = 512; pattern.spellcheck = false; pattern.value = rule.pattern ?? ''; pattern.setAttribute('aria-label', 'Date pattern');
         pattern.oninput = () => { target().pattern = pattern.value; this.changed(); this.mark(row, target()); };
         const fallback = rule.site === 'status' ? DEFAULT_STATUS_DATE_PATTERN : DEFAULT_DATE_PATTERN;
         const reset = this.button('Restore default pattern', () => { target().pattern = fallback; this.render(); this.changed(); });
         const hint = document.createElement('p'); hint.className = 'config-hint'; hint.textContent = 'A regular expression with a named (?<date>...) capture for an ISO date; the first real calendar day wins.';
-        advanced.append(summary, field('Date pattern', pattern), reset, hint); row.append(advanced);
+        advanced.append(summary, explain(field('Date pattern', pattern), hint.textContent!), reset); row.append(advanced);
       }
-      const actions = document.createElement('div'); actions.className = 'config-date-actions';
       const up = this.button('Move up', () => { const list = this.settings().rules; [list[index - 1], list[index]] = [list[index], list[index - 1]]; this.render(); this.changed(); }, `Move ${this.title(rule)} up`); up.disabled = index === 0;
       const down = this.button('Move down', () => { const list = this.settings().rules; [list[index + 1], list[index]] = [list[index], list[index + 1]]; this.render(); this.changed(); }, `Move ${this.title(rule)} down`); down.disabled = index === rules.length - 1;
-      actions.append(up, down, this.button('Remove', () => { this.settings().rules.splice(index, 1); this.render(); this.changed(); }, `Remove ${this.title(rule)}`));
+      // Move up, Move down, and Delete sit on the rule's title line.
+      const remove = this.button('Delete', () => { this.settings().rules.splice(index, 1); this.render(); this.changed(); }, `Delete ${this.title(rule)}`);
       const message = document.createElement('p'); message.className = 'coral config-date-problem'; message.setAttribute('role', 'status');
-      row.append(actions, message); this.mark(row, rule);
+      row.append(message); this.mark(row, rule); sync();
       const model = this.models.get(rule.key) ?? {}; this.models.set(rule.key, model);
-      return configurationEntry(model, row, () => this.title(this.view().rules[index] ?? rule), !!this.problem(rule));
+      return configurationEntry(model, row, () => this.title(this.view().rules[index] ?? rule), !!this.problem(rule), [up, down, remove], enabled);
     }));
     if (!rules.length) { const empty = document.createElement('p'); empty.className = 'config-hint'; empty.textContent = 'No date rules: no dates are recorded. Add a rule or restore the defaults.'; this.list.append(empty); }
     this.exclusions.replaceChildren(...view.exclude.map((entry, index) => {
@@ -151,7 +151,7 @@ export class DateRulesEditor {
       const id = `${evidence.source.file}:${date.offset}`; if (seen.has(id)) continue; seen.add(id);
       found.set(date.ruleKey, [...(found.get(date.ruleKey) ?? []), { value: date.value, text: `${item.id}: ${evidence.display ?? evidence.value}`, location: location(evidence.source.file, date.offset, date.end) }]);
     }
-    const heading = document.createElement('h4'); heading.textContent = 'Dates found by the draft rules';
+    const heading = explain(document.createElement('h4'), 'Dates each enabled rule finds in the project Markdown with the draft settings. Select a date to open its source.'); heading.textContent = 'Dates found by the draft rules';
     const skipped = Object.keys(documents).filter(file => excluded(file, settings.exclude)).length;
     const summary = document.createElement('p'); summary.className = 'config-hint'; summary.id = 'config-date-summary';
     summary.textContent = `${[...found.values()].reduce((sum, list) => sum + list.length, 0)} dates from ${settings.rules.filter(rule => rule.enabled).length} enabled rules; ${skipped} Markdown file${skipped === 1 ? '' : 's'} excluded.`;

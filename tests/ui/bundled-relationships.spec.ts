@@ -2,6 +2,8 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pluginFrame } from './plugin-frame';
+import { menuAction, openOverview } from './menu-action';
+import { seedLegacyConfiguration } from './legacy-configuration';
 
 let app: ElectronApplication, page: Page, root: string, project: string;
 const content = '# REQ-001 - First\nDD-001\n# DD-001 - Design\nREQ-001 TASK-001 DD-001 REQ-404\n# TASK-001 - Build\nDD-001\n# REQ-002 - Isolated\n';
@@ -12,6 +14,7 @@ async function launch(restart = false) {
   }
   const env = Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== 'ELECTRON_RUN_AS_NODE' && v !== undefined)) as Record<string, string>;
   const args = ['--project=' + project];
+  await seedLegacyConfiguration(project);
   app = await electron.launch({ ...(process.env.SPECULAR_TEST_PACKAGED ? { executablePath: path.resolve('out', `Specular-${process.platform}-${process.arch}`, 'Specular.exe'), args } : { args: ['.', ...args] }), env: { ...env, SPECULAR_USER_DATA: path.join(root, 'user-data') } });
   page = await app.firstWindow(); await expect(page.locator('#lens-results .lens-card').first()).toBeVisible();
 }
@@ -28,7 +31,7 @@ async function close() { await app.evaluate(({ BrowserWindow }) => BrowserWindow
 test.afterEach(async ({}, info) => { if (info.status !== info.expectedStatus) await page?.screenshot({ path: info.outputPath('failure.png') }).catch(() => {}); await close().catch(() => {}); });
 
 test('Codex chat and nested dialogs cover focused Relationships and restore its native surface', async () => {
-  await launch(); await page.locator('#dependency-overview-open').click();
+  await launch(); await openOverview(page);
   const frame = await pluginFrame(app);
   await frame.getByRole('button', { name: 'Zoom in', exact: true }).click();
   const camera = await frame.locator('.dependency-graph-controls span').textContent();
@@ -77,7 +80,7 @@ test('bundled Focus and Overview preserve evidence, complete graph, and session 
   const camera = await custom("document.querySelector('.dependency-graph-controls span').textContent");
   await custom("[...document.querySelectorAll('button')].find(b=>b.textContent==='Open DD-001 definition').click()");
   await expect(page.locator('#document-path')).toHaveText('requirements.md');
-  await page.locator('#dependency-overview-open').click();
+  await openOverview(page);
   await expect.poll(() => custom('document.body.innerText')).toContain('DD-001 - Full-model connections');
   await expect.poll(() => custom("document.querySelector('.dependency-graph-controls span')?.textContent")).toBe(camera);
   await page.getByRole('button', { name: 'Focus', exact: true }).click();
@@ -88,68 +91,80 @@ test('bundled Focus and Overview preserve evidence, complete graph, and session 
 });
 
 test('bundled crash retry, explicit replacement and restoration use the ordinary isolated runtime', async () => {
-  await launch(); await page.locator('#dependency-overview-open').click();
+  await launch(); await openOverview(page);
   await expect.poll(() => custom('document.body.innerText')).toContain('Project dependencies');
   await app.evaluate(({ webContents }) => { const view = webContents.getAllWebContents().find(w => w.getURL().includes('/custom.html'))!; setTimeout(() => view.forcefullyCrashRenderer(), 0); });
   await expect(page.locator('.plugin-custom-host:visible > [role=status]')).toContainText('process stopped');
-  await page.getByRole('button', { name: 'Close Relationships', exact: true }).click(); await page.locator('#dependency-overview-open').click();
+  await page.getByRole('button', { name: 'Close Project map', exact: true }).click(); await openOverview(page);
   await expect.poll(() => custom('document.body.innerText')).toContain('Project dependencies');
-  await page.getByRole('button', { name: 'Close Relationships', exact: true }).click();
+  await page.getByRole('button', { name: 'Close Project map', exact: true }).click();
   const replacement = path.join(root, 'replacement'); await mkdir(replacement);
   const manifest = JSON.parse(await readFile('bundled-plugins/relationships/specular-plugin.json', 'utf8'));
   await writeFile(path.join(replacement, 'specular-plugin.json'), JSON.stringify({ ...manifest, version: '2.0.0', entry: 'index.js' }));
   await writeFile(path.join(replacement, 'package.json'), '{"type":"module"}');
   await writeFile(path.join(replacement, 'index.js'), 'export function activate(){throw new Error("failed replacement")}');
   await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] }); dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); }, replacement);
-  await page.locator('#plugin-view-open').click();
+  await menuAction(app, 'plugin-install-folder');
   await expect(page.locator('.plugin-custom-host:visible > [role=status]')).toContainText('failed');
-  await page.locator('#plugin-manager-open').click();
+  await menuAction(app, 'plugin-manager');
   const row = page.locator('.plugin-manager-item').filter({ hasText: 'specular.relationships' });
   await expect(row).toContainText('Installed replacement');
   await row.getByRole('button', { name: 'Restore bundled version', exact: true }).click(); await expect(row).toContainText('Bundled');
-  await page.locator('#plugin-manager-close').click(); await page.locator('#dependency-overview-open').click();
+  await page.locator('#plugin-manager-close').click(); await openOverview(page);
   await expect.poll(() => custom('document.querySelectorAll(".dependency-graph-node").length')).toBe(5);
   expect(await readFile(path.join(project, 'requirements.md'), 'utf8')).toBe(content);
 });
 
 test('disable survives restart and restoration keeps the explicit disabled preference', async () => {
-  await launch(); await page.locator('#plugin-manager-open').click();
+  await launch(); await menuAction(app, 'plugin-manager');
   const row = page.locator('.plugin-manager-item').filter({ hasText: 'specular.relationships' });
   await expect(row).toContainText('Bundled'); await row.getByRole('button', { name: 'Disable', exact: true }).click();
   await row.getByRole('button', { name: 'Restore bundled version', exact: true }).click();
   await expect(row.getByRole('button', { name: 'Enable', exact: true })).toBeVisible();
   await close(); await launch(true);
-  await expect(page.locator('#dependency-overview-open')).toBeDisabled();
+  await expect(page.locator('#loaded-plugin-views button[data-plugin-id="specular.relationships"]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Explore map for REQ-001', exact: true })).toHaveCount(0);
-  await page.locator('#plugin-manager-open').click();
+  await menuAction(app, 'plugin-manager');
   await page.locator('.plugin-manager-item').filter({ hasText: 'specular.relationships' }).getByRole('button', { name: 'Enable', exact: true }).click();
-  await page.locator('#plugin-manager-close').click(); await page.locator('#dependency-overview-open').click();
+  await page.locator('#plugin-manager-close').click(); await openOverview(page);
   await expect.poll(() => custom('document.querySelectorAll(".dependency-graph-node").length')).toBe(5);
 });
 
 test('Project Lens controls remain spaced at minimum size with zero and multiple additional plugins', async () => {
   await launch(); await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1120, 720));
   const spacing = async () => {
-    const controls = page.locator('#plugin-view-open, #plugin-manager-open, #loaded-plugin-views button, #dependency-overview-open');
+    const controls = page.locator('#loaded-plugin-views button');
     const boxes = await controls.evaluateAll(nodes => nodes.map(node => { const r = node.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, left: r.left, right: r.right }; }));
-    expect(boxes[1].left - boxes[0].right).toBeGreaterThanOrEqual(3.9);
-    // Plugin shortcuts have their own bounded scroller.
-    const actions = await page.locator('.lens-plugin-actions').boundingBox();
+    // Abstraction shortcuts are stacked rows below their title, in their own bounded scroller.
+    for (let i = 1; i < boxes.length; i++) expect(boxes[i].top).toBeGreaterThanOrEqual(boxes[i - 1].bottom);
+    const title = await page.locator('.lens-abstractions-title').boundingBox();
     const shortcuts = await page.locator('#loaded-plugin-views').boundingBox();
-    const overview = await page.locator('#dependency-overview-open').boundingBox();
-    expect(shortcuts!.y - (actions!.y + actions!.height)).toBeGreaterThanOrEqual(3.9);
-    expect(overview!.y - (shortcuts!.y + shortcuts!.height)).toBeGreaterThanOrEqual(3.9);
+    const below = await page.locator('.lens-tabs').boundingBox();
+    expect(shortcuts!.y).toBeGreaterThanOrEqual(title!.y + title!.height);
+    expect(below!.y - (shortcuts!.y + shortcuts!.height)).toBeGreaterThanOrEqual(3.9);
     expect(boxes.every(b => b.left >= 0 && b.right <= 1120)).toBe(true);
     const inspector = await page.locator('.inspector').boundingBox();
     const results = await page.locator('#lens-results').boundingBox();
     expect(results!.height).toBeGreaterThan(inspector!.height / 2);
   };
   await spacing();
-  for (const example of ['example-path.txt', 'headings-example-path.txt']) {
+  for (const [index, example] of ['example-path.txt', 'headings-example-path.txt'].entries()) {
     const directory = (await readFile(path.join('.cache/plugin-sdk', example), 'utf8')).trim();
     await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] }); }, directory);
-    await page.locator('#plugin-view-open').click();
+    // Wait for each install before replacing the dialog stub for the next one.
+    await menuAction(app, 'plugin-install-folder'); await expect(page.locator('#loaded-plugin-views button')).toHaveCount(4 + index);
   }
-  await expect(page.locator('#loaded-plugin-views button')).toHaveCount(3); await spacing();
+  // Relationships, Feature dossier (93), and Agent activity (95b) are bundled, plus the two examples.
+  await expect(page.locator('#loaded-plugin-views button')).toHaveCount(5); await spacing();
   await page.screenshot({ path: 'test-results/bundled-plugin-lens-minimum.png' });
+});
+
+test('Relationships opened under an open terminal stays above the terminal panel', async () => {
+  await launch(); await page.locator('#show-terminals').click(); await expect(page.locator('#terminal-panel')).toBeVisible();
+  await openOverview(page); await pluginFrame(app);
+  const bottom = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].contentView.children.filter(v => v.getVisible() && (v as any).webContents?.getURL().includes('/custom.html')).map(v => v.getBounds().y + v.getBounds().height)[0]);
+  const terminalTop = await page.locator('#terminal-panel').evaluate(e => e.getBoundingClientRect().top);
+  await expect.poll(bottom).toBeLessThanOrEqual(Math.ceil(terminalTop));
+  await page.getByRole('button', { name: 'Focus', exact: true }).click(); await pluginFrame(app);
+  await expect.poll(bottom).toBeLessThanOrEqual(Math.ceil(terminalTop));
 });

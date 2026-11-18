@@ -3,6 +3,7 @@ import { configurationEntry, rememberConfigurationEntries } from './configuratio
 import type { IdConfiguration } from '../core/id-configuration';
 import type { ModuleFileRule, ModuleOverride, ProjectModule } from '../core/module-configuration';
 import { editModuleFileRule, removeModuleFileRule, removeProjectModule, editModuleOverride, mergeModuleOverride, removeModuleOverride } from '../core/module-rule-editing';
+import { explain } from './hover-hint';
 type RuleView = { rule: ModuleFileRule };
 type OverrideView = { rule: ModuleOverride };
 /** Edits the containing configuration draft; the host owns preview and Apply. */
@@ -23,20 +24,19 @@ export class ModuleConfigurationEditor {
   private unique(base: string, used: string[]) { if (!used.includes(base)) return base; let n = 2; while (used.includes(`${base}-${n}`)) n++; return `${base}-${n}`; }
   render() {
     rememberConfigurationEntries(this.root); this.ruleControls = []; this.overrideControls = []; this.overrideSections = [];
-    const config = this.draft(), summary = document.createElement('h3'); summary.textContent = 'Application modules';
-    const hint = document.createElement('p'); hint.className = 'config-hint'; hint.textContent = 'Modules such as GUI or backend are independent of category. File rules combine memberships from definition files. Exact-ID overrides replace them; an empty override means explicitly unassigned.';
+    const config = this.draft();
     const names = document.createElement('section'); names.className = 'module-names';
     const add = this.button('Add module', () => {
       const module = { key: this.unique('module', (config.modules ?? []).map(m => m.key)), name: '' };
       (config.modules ??= []).push(module); this.render(); this.changed(); this.root.querySelector<HTMLInputElement>('.module-names > .config-entry:last-child > .module-row input')?.focus();
     }); add.disabled = (config.modules?.length ?? 0) >= 64;
-    const header = document.createElement('div'); header.className = 'config-section-heading'; header.append(summary, add);
+    const header = document.createElement('div'); header.className = 'config-section-heading'; header.append(add);
     for (const [i, module] of (config.modules ?? []).entries()) {
       const row = document.createElement('div'); row.className = 'module-row'; row.dataset.moduleIndex = String(i);
       row.append(this.input('Module name', module.name, value => { module.name = value; }),
         this.button('Remove module', () => { removeProjectModule(config, module.key); this.render(); this.changed(); }), this.moduleRules(module, i), this.moduleOverrides(module, i)); names.append(configurationEntry(module, row, () => `${config.modules!.indexOf(module) + 1}. ${module.name || 'New module'}`, !module.name));
     }
-    this.root.replaceChildren(header, hint, names, this.moduleOverrides()); this.updateRuleControls(); this.updateOverrideControls();
+    this.root.replaceChildren(header, names, this.moduleOverrides()); this.updateRuleControls(); this.updateOverrideControls();
   }
   private moduleRules(module: ProjectModule, moduleIndex: number) {
     const config = this.draft(), section = document.createElement('section'); section.className = 'module-rules';
@@ -55,7 +55,8 @@ export class ModuleConfigurationEditor {
       this.root.querySelector<HTMLInputElement>(`[data-module-index="${moduleIndex}"] .module-rules > .config-entry:last-child input`)?.focus();
     }); add.classList.add('module-add-rule'); heading.append(title, add);
     const hint = document.createElement('p'); hint.className = 'config-hint'; hint.textContent = 'Assign IDs defined in a file or folder to this module. Editing or removing a rule here leaves other modules unchanged.';
-    section.append(heading, hint);
+    explain(title, hint.textContent!);
+    section.append(heading);
     const rules = (config.moduleRules ?? []).filter(rule => rule.modules.includes(module.key));
     if (!rules.length) { const empty = document.createElement('p'); empty.className = 'config-hint module-rules-empty'; empty.textContent = 'No file or folder rules in this module.'; section.append(empty); }
     for (const [i, rule] of rules.entries()) {
@@ -100,7 +101,8 @@ export class ModuleConfigurationEditor {
     const hint = document.createElement('p'); hint.className = 'config-hint';
     hint.textContent = module ? 'Assign an exact ID to this module instead of its file/folder assignments. Adding an existing ID keeps its other explicit modules. Removing the last module leaves the ID unassigned.' : 'These IDs override file/folder assignments with no module. Restore file/folder assignments to remove an override.';
     const empty = document.createElement('p'); empty.className = 'config-hint module-overrides-empty'; empty.textContent = module ? 'No ID overrides in this module.' : 'No explicitly unassigned IDs.';
-    section.append(heading, hint, empty); this.overrideSections.push({ module: module?.key, empty });
+    explain(title, hint.textContent!);
+    section.append(heading, empty); this.overrideSections.push({ module: module?.key, empty });
     const rules = (config.moduleOverrides ?? []).filter(rule => module ? rule.modules.includes(module.key) : !rule.modules.length);
     for (const [i, rule] of rules.entries()) {
       let targets = this.overrideViews.get(rule); if (!targets) { targets = new Map(); this.overrideViews.set(rule, targets); }

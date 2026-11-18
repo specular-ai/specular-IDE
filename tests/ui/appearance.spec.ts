@@ -2,11 +2,14 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pluginFrame } from './plugin-frame';
+import { menuAction, openOverview } from './menu-action';
+import { seedLegacyConfiguration } from './legacy-configuration';
 
 let app: ElectronApplication, page: Page, root: string, project: string, userData: string;
 const markdown = '# REQ-001 - Readable workspace\n\nText with **bold**, *emphasis*, `code`, and [a link](#req-001---readable-workspace).\n\n| Name | Value |\n| --- | --- |\n| Mode | Light and dark |\n\n- 2026-09-16: Added REQ-001.\n\n## DD-001 - Appearance\n\nImplements REQ-001.\n\n```mermaid\ngraph LR\n A[Readable text] --> B[Both modes]\n```\n';
 async function launch(open = true) {
   const env = Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== 'ELECTRON_RUN_AS_NODE' && v !== undefined)) as Record<string, string>;
+  await seedLegacyConfiguration(project);
   app = await electron.launch({ args: ['.', ...(open ? ['--project=' + project] : [])], env: { ...env, SPECULAR_USER_DATA: userData } });
   page = await app.firstWindow(); await expect(page.locator('#theme-switch')).toBeEnabled();
   if (open) await expect(page.locator('#preview')).toContainText('Readable workspace');
@@ -76,7 +79,7 @@ test('empty workspace, invalid preference and failed save remain usable', async 
 });
 
 test('bundled custom views switch live without losing selected ID or camera', async () => {
-  await launch(); await page.locator('#dependency-overview-open').click();
+  await launch(); await openOverview(page);
   let frame = await pluginFrame(app); await expect(frame.locator('#dependency-overview')).toBeVisible();
   await frame.getByRole('button', { name: 'Zoom in', exact: true }).click();
   const camera = await frame.locator('.dependency-graph-controls span').textContent();
@@ -105,7 +108,7 @@ test('all independently built examples inherit light/dark and preserve custom fi
   for (const [fixture, selector] of [['example', '.plugin-list-item'], ['headings-example', '.plugin-list-item'], ['timeline-example', '#project-timeline'], ['template-example', '.plugin-list-item'], ['custom-example', '#plugin-root main']] as const) {
     const directory = (await readFile(`.cache/plugin-sdk/${fixture}-path.txt`, 'utf8')).trim();
     await app.evaluate(({ dialog }, p) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] }); }, directory);
-    await mode('light'); await page.locator('#plugin-view-open').click();
+    await mode('light'); await menuAction(app, 'plugin-install-folder');
     let custom: Frame | undefined;
     if (selector.startsWith('#')) {
       custom = await pluginFrame(app, selector);

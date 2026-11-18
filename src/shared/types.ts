@@ -31,6 +31,8 @@ export interface Occurrence extends SourceLocation {
   authoredStatus?: import('../core/statuses').AuthoredStatus;
   moduleAssignment?: ModuleAssignment;
   featureAssignment?: FeatureAssignment;
+  /** Increment 96f: tags of the category's section headings enclosing this definition, in configured order. */
+  tags?: string[];
   category?: import('../core/id-configuration').IdCategory;
   id: string;
   kind: 'definition' | 'reference';
@@ -43,6 +45,10 @@ export interface Finding extends SourceLocation {
   scope?: string;
   kind: 'pending' | 'duplicate' | 'unresolved' | 'module-conflict' | 'feature-conflict' | 'consistency';
   message: string;
+  /** Increment 99b: for pending work, the ID whose section contains it. */
+  owner?: { id: string; offset: number; scope?: string };
+  /** Increment 99b: an open clarification marker, such as Spec Kit's `[NEEDS CLARIFICATION: question]`; the message is its question. */
+  clarification?: true;
 }
 
 export interface Diagram extends SourceLocation { source: string }
@@ -51,15 +57,21 @@ export interface DocumentModel {
   occurrences: Occurrence[];
   pending: Finding[];
   diagrams: Diagram[];
+  /** Increment 105: checkbox markers of ID-defining items that gave no status where checkbox statuses are on, per marker. */
+  unmappedMarkers?: Record<string, number>;
 }
 export interface ProjectIndex {
   configurationRevision?: string;
+  /** Increment 100b: the effective traceability layers (configured, or from roles), in order. */
+  layers?: import('../core/layers').TraceLayer[];
   definitions: Occurrence[];
   references: Occurrence[];
   findings: Finding[];
   diagrams: Diagram[];
   /** Dated entries found by the event date rule (increment 79). */
   events?: import('../core/dates').IndexedEvent[];
+  /** Increment 105: checkbox markers that gave no status, per marker, across the documents. */
+  unmappedMarkers?: Record<string, number>;
 }
 export interface ProjectFile { path: string; markdown: boolean; configuration: boolean }
 export interface WorkspaceSnapshot {
@@ -77,6 +89,8 @@ export interface WorkspaceSession { files: string[]; activeFile?: string }
 export interface OpenDocument { path: string; text: string; version: string }
 export interface RecentProject { path: string; name: string }
 export interface RecentProjectsState { projects: RecentProject[]; warning?: string }
+/** Increment 97c: what each discovery plugin returned, unchecked, and the plugins that failed. */
+export interface PluginDiscovery { results: { id: string; tool: string; suggestions: unknown[]; gaps?: { text: string; evidence?: unknown[] }[] }[]; errors: string[] }
 export interface InstalledPluginInfo {
   revision?: number;
   bundledVersion?: string;
@@ -109,14 +123,31 @@ export interface SpecularBridge {
   onAgentDiscoveryProgress(callback: (value: { requestId: string; message: string; kind: import('../core/discovery-run').ProgressKind }) => void): () => void;
   onPluginFailure(callback: (event: { id: string; message: string }) => void): () => void;
   onCustomPluginState(callback: (event: { id: string; viewId: string; requestId: string; state: string }) => void): () => void;
+  /** Increment 94: summary calls from custom plugin views; the renderer answers with `summaryReply`. */
+  onCustomPluginSummary(callback: (event: { id: string; viewId: string; requestId: string; call: string; op: 'get' | 'generate' | 'cancel'; subject: unknown; options?: unknown }) => void): () => void;
+  summaryReply(id: string, call: string, result: { ok: true; record?: import('../../packages/plugin-api/src/index').SummaryRecord } | { ok: false; message: string }): Promise<void>;
+  summaryRead(subject: import('../../packages/plugin-api/src/index').SummarySubject): Promise<import('../core/summaries').StoredSummary | undefined>;
+  summaryWrite(summary: import('../core/summaries').StoredSummary): Promise<void>;
+  summaryRun(request: { runId: string; agent: 'codex' | 'claude'; executable?: string; model?: string; input: string }): Promise<{ ok: true; text: string } | { ok: false; message: string }>;
+  summaryCancel(runId: string): Promise<void>;
+  summaryConsent(): Promise<boolean>;
+  saveSummaryConsent(granted: boolean): Promise<{ ok: boolean; message?: string }>;
+  /** Increment 95: the open project's agent activity model; `force` rescans the logs now instead of within 10 s. */
+  activityModel(force?: boolean): Promise<import('../../packages/plugin-api/src/index').ActivityModel>;
+  activityEnabled(): Promise<boolean>;
+  saveActivityEnabled(enabled: boolean): Promise<{ ok: boolean; message?: string }>;
   onCustomPluginNavigate(callback: (event: { id: string; viewId: string; requestId: string; source: import('../../packages/plugin-api/src/index').SourceReference }) => void): () => void;
-  choosePlugin(): Promise<import('./plugin-runtime').PluginManifest | null>;
+  /** 97c: `profile` accepts only packages with a discovery contribution; the default, `abstraction`, only packages with views. */
+  choosePlugin(kind?: 'abstraction' | 'profile'): Promise<import('./plugin-runtime').PluginManifest | null>;
   pluginList(): Promise<InstalledPluginInfo[]>;
-  installPluginArchive(): Promise<import('./plugin-runtime').PluginManifest | null>;
+  installPluginArchive(kind?: 'abstraction' | 'profile'): Promise<import('./plugin-runtime').PluginManifest | null>;
   setPluginEnabled(id: string, enabled: boolean): Promise<InstalledPluginInfo[]>;
   uninstallPlugin(id: string): Promise<InstalledPluginInfo[]>;
   restoreBundledPlugin(id: string): Promise<InstalledPluginInfo[]>;
   renderPlugin(id: string, request: string): Promise<import('./plugin-runtime').RenderResult>;
+  /** Increment 97c: runs the enabled discovery plugins not in `disabled` over the selected Markdown (`request` is JSON of projectId, revision, documents). */
+  /** 97d: runs the named installed profiles, those that are on for the project. */
+  discoverWithPlugins(request: string, ids: string[]): Promise<PluginDiscovery>;
   renderCustomPlugin(id: string, request: string, bounds: PluginBounds): Promise<void>;
   layoutCustomPlugin(id: string, bounds: PluginBounds): Promise<void>;
   stopPlugin(id: string): Promise<void>;
@@ -148,6 +179,7 @@ export interface SpecularBridge {
   chooseAgentPath(): Promise<string | null>;
   initialWorkspace(): Promise<WorkspaceOpenResult>;
   chooseWorkspace(): Promise<WorkspaceOpenResult>;
+  closeWorkspace(): Promise<WorkspaceOpenResult>;
   openDemo(): Promise<WorkspaceOpenResult>;
   recentProjects(): Promise<RecentProjectsState>;
   theme(): Promise<import('./appearance').ThemeMode>;
@@ -156,6 +188,8 @@ export interface SpecularBridge {
   setCustomPluginsObscured(obscured: boolean): Promise<void>;
   fontSizes(): Promise<import('./font-sizes').FontSizes>;
   saveFontSizes(sizes: import('./font-sizes').FontSizes): Promise<{ ok: boolean; message?: string }>;
+  panelLayout(): Promise<import('./panel-layout').PanelLayout>;
+  savePanelLayout(layout: import('./panel-layout').PanelLayout): Promise<{ ok: boolean; message?: string }>;
   openRecent(path: string): Promise<WorkspaceOpenResult>;
   removeRecent(path: string): Promise<RecentProjectsState>;
   clearRecent(): Promise<RecentProjectsState>;
@@ -165,7 +199,7 @@ export interface SpecularBridge {
   finishClose(): Promise<boolean>;
   cancelClose(): Promise<void>;
   readDocument(path: string): Promise<OpenDocument>;
-  createMarkdown(name: string): Promise<CreateDocumentResult>;
+  createMarkdown(name: string, folder?: string): Promise<CreateDocumentResult>;
   saveDocument(path: string, text: string, version: string, project: string): Promise<SaveResult>;
   resolveLink(from: string, href: string): Promise<{ path: string; anchor: string }>;
   copyBrief(text: string): Promise<void>;

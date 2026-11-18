@@ -68,7 +68,7 @@ function configuredSnapshot(): WorkspaceViewSnapshot {
 }
 test('the project model lists each distinct ID with its status occurrences, modules, and features', () => {
   const project = modelsFor(configuredSnapshot()).project;
-  assert.equal(project.provenance.extractorVersion, '6');
+  assert.equal(project.provenance.extractorVersion, '8');
   assert.deepEqual(project.ids.map(item => item.key), ['REQ-001', 'DD-001', 'REQ-404']);
   const requirement = project.ids.find(item => item.key === 'REQ-001')!;
   assert.deepEqual(requirement.category, { key: 'REQ', name: 'Requirements', role: 'requirement' });

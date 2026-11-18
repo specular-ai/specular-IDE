@@ -7,9 +7,14 @@ import remarkGfm from 'remark-gfm';
 import { toString } from 'mdast-util-to-string';
 import type { Nodes, Root } from 'mdast';
 import type { Diagram, DocumentModel, Finding, Occurrence, ProjectIndex, SourceLocation } from '../shared/types';
-import { compileIdMatcher, type IdCategory, type IdMatch, type IdMatcher } from './id-configuration';
+import { compileIdMatcher, SECTION_TAG, sectionHeadingDisplay, sectionHeadingText, sectionPatternTag, sectionTagRegex, type DefinitionSiteKind, type IdCategory, type IdMatch, type IdMatcher, type SectionTag } from './id-configuration';
 
-import { captureForFile, captureName, pathsContain, scopeForFile } from './id-scopes';
+import { captureForFile, captureName, fileInScopes, pathsContain, scopeForFile } from './id-scopes';
+
+/** Increment 99b: Spec Kit's open-question marker, `[NEEDS CLARIFICATION: question]`; the bare words in prose are not a marker. */
+const CLARIFICATION_MARKER = /\[NEEDS CLARIFICATION:\s*([^\]\n]*)\]/g;
+/** Questions copied from the templates' instructions, not real open questions. */
+const PLACEHOLDER_QUESTION = /^(?:|specific question|question|\.\.\.|…)$/i;
 
 const parser = unified().use(remarkParse).use(remarkGfm);
 export function parseMarkdown(text: string): Root { return parser.parse(text); }
@@ -18,21 +23,23 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
   matchIds = matchIds.forFile?.(file) ?? matchIds;
   const root = parseMarkdown(text);
   const sites = matchIds.definitionSites ?? DEFAULT_ID_DEFINITION_SITES;
-  // Labelled-list items are references only, so definition sites never see them.
-  const ids = ((input: string) => matchIds(input).filter(match => !match.listed)) as IdMatcher;
+  // Labelled-list items are references only, so definition sites never see them; matches of defining templated rules (96e) only define.
+  const ids = ((input: string, site?: DefinitionSiteKind) => matchIds(input, site).filter(match => !match.listed || match.defines)) as IdMatcher;
+  // 104: each definition site reads its text as that site, so anchored defining rules run only where their category defines.
+  const at = (site: DefinitionSiteKind, matcher: IdMatcher) => ((input: string) => matcher(input, site)) as IdMatcher;
   const effectiveSites = matchIds.definitionSitesByCategory?.size
     // Outside a category's definition paths (90), its definition sites do not apply, so its IDs there are references.
     ? [...matchIds.definitionSitesByCategory].filter(([category]) => { const paths = matchIds.categories?.get(category)?.definitionPaths; return !paths || pathsContain(file, paths); }).map(([category, value]) => {
-      const filtered = ((input: string) => ids(input).filter(match => match.category.key === category)) as IdMatcher;
-      const heading = compileDefinitionSite(value.headings.mode, value.headings, value.headings.mode === 'regex' ? ids : filtered);
-      const table = compileDefinitionSite(value.tables.mode, value.tables, value.tables.mode === 'regex' ? ids : filtered);
-      const list = compileDefinitionSite('start', {}, filtered);
-      return { category, sites: value,
-        headingMatch: (input: string) => { const match = heading(input); return match?.category.key === category ? match : undefined; },
-        tableMatch: (input: string) => { const match = table(input); return match?.category.key === category ? match : undefined; },
-        listMatch: (input: string) => { const match = list(input); return match?.category.key === category ? match : undefined; } };
+      const filtered = ((input: string, site?: DefinitionSiteKind) => ids(input, site).filter(match => match.category.key === category)) as IdMatcher;
+      const heading = compileDefinitionSite(value.headings.mode, value.headings, at('headings', value.headings.mode === 'regex' ? ids : filtered));
+      const table = compileDefinitionSite(value.tables.mode, value.tables, at('tables', value.tables.mode === 'regex' ? ids : filtered));
+      const list = compileDefinitionSite('start', {}, at('lists', filtered)), paragraph = compileDefinitionSite('start', {}, at('paragraphs', filtered));
+      const own = (match: IdMatch | undefined) => match?.category.key === category ? match : undefined;
+      return { category, sites: value, headingMatch: (input: string) => own(heading(input)), tableMatch: (input: string) => own(table(input)),
+        listMatch: (input: string) => own(list(input)), paragraphMatch: (input: string) => own(paragraph(input)) };
     })
-    : [{ category: undefined, sites, headingMatch: compileDefinitionSite(sites.headings.mode, sites.headings, ids), tableMatch: compileDefinitionSite(sites.tables.mode, sites.tables, ids), listMatch: compileDefinitionSite('start', {}, ids) }];
+    : [{ category: undefined, sites, headingMatch: compileDefinitionSite(sites.headings.mode, sites.headings, at('headings', ids)), tableMatch: compileDefinitionSite(sites.tables.mode, sites.tables, at('tables', ids)),
+      listMatch: compileDefinitionSite('start', {}, at('lists', ids)), paragraphMatch: compileDefinitionSite('start', {}, at('paragraphs', ids)) }];
   const definitionsBySite = new Map<Nodes, Occurrence>();
   /** A link reference definition such as `[R1]: Title`, read as its literal source so a bracketed ID can define (91). */
   const literalText = (node: Nodes): Nodes => ({ type: 'text', value: text.slice(node.position?.start.offset, node.position?.end.offset), position: node.position });
@@ -43,8 +50,30 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
   const definitionOffsets = new Set<number>();
   const pendingLines = new Set<number>();
   // Increment 85a: enclosing headings and their definitions, for nested (parent) categories.
-  const headingStack: { depth: number; definition?: Occurrence }[] = [];
+  const headingStack: { depth: number; definition?: Occurrence; text?: string }[] = [];
   const parentLinks: [Occurrence, Occurrence][] = [];
+  // Increment 96d: categories numbering ordered list items inside an element of their parent, such as Kiro acceptance criteria.
+  const numbered = [...(matchIds.categories?.values() ?? [])].filter(category => category.numberedItems
+    && (!category.onlyInScopes || fileInScopes(file, category.idScopes)) && (!category.definitionPaths || pathsContain(file, category.definitionPaths)));
+  const sectionText = sectionHeadingText;
+  const numberItems = (list: Extract<Nodes, { type: 'list' }>) => {
+    for (const category of numbered) {
+      const options = category.numberedItems!;
+      let at = headingStack.length - 1; while (at >= 0 && headingStack[at].definition?.category?.key !== options.parent) at--;
+      if (at < 0 || (options.section && (headingStack.length - 1 <= at || sectionText(headingStack.at(-1)!.text ?? '') !== sectionText(options.section)))) continue;
+      const parent = headingStack[at].definition!, number = /(\d+)(?!.*\d)/u.exec(parent.id)?.[1];
+      if (number === undefined) continue;
+      list.children.forEach((item, index) => {
+        const first = item.children[0];
+        if (definitionsBySite.has(item) || !first?.position || first.position.start.offset === undefined) return;
+        const start = first.position.start.offset, newline = text.indexOf('\n', start);
+        const end = Math.min(first.position.end.offset ?? start, newline < 0 ? text.length : text[newline - 1] === '\r' ? newline - 1 : newline);
+        const id = options.id.replaceAll('{parent}', number).replaceAll('{item}', String(index + 1));
+        const definition: Occurrence = { ...location(start, Math.max(end - start, 1)), id, category, kind: 'definition', label: toString(first).split('\n')[0].trim() };
+        occurrences.push(definition); definitionsBySite.set(item, definition); parentLinks.push([definition, parent]);
+      });
+    }
+  };
   // Increment 85b: the enclosing ADDED/MODIFIED/REMOVED/RENAMED section, and categories linked by backticked names.
   let deltaSection: { depth: number; kind: NonNullable<Occurrence['delta']> } | undefined;
   const nameCategories = [...(matchIds.categories?.values() ?? [])].filter(category => category.nameReferences);
@@ -60,13 +89,14 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
   };
   const addDefinition = (node: Nodes, match: IdMatch, label: string, mode: string, allowedLeafTypes?: string[]) => {
     const id = match.id;
-    const offset = definitionSourceOffset(node, text, match, allowedLeafTypes);
+    // A defining templated match (96e) is found by its source text, which is also its range.
+    const offset = definitionSourceOffset(node, text, match.text === undefined ? match : { ...match, id: match.text }, allowedLeafTypes);
     if (offset === undefined) {
       if (mode === 'regex') throw new Error(`Line ${node.position?.start.line}: captured ID ${id} has no reliable literal source span.`);
       return;
     }
     definitionOffsets.add(offset);
-    const definition: Occurrence = { ...location(offset, id.length), id, category: match.category, kind: 'definition', label };
+    const definition: Occurrence = { ...location(offset, (match.text ?? id).length), id, category: match.category, kind: 'definition', label };
     occurrences.push(definition); definitionsBySite.set(node, definition);
     return definition;
   };
@@ -123,6 +153,7 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
   };
   const checkboxStatus = (definition: Occurrence | undefined) => !!definition
     && !!(matchIds.statusSitesByCategory?.get(definition.category?.key ?? '') ?? matchIds.statusSites)?.checkboxes?.enabled;
+  const markerLines = new Set<number>();
   const addPending = (node: Nodes, message: string) => {
     const offset = node.position?.start.offset ?? 0;
     const source = location(offset);
@@ -131,9 +162,32 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
       pending.push({ ...source, kind: 'pending', message });
     }
   };
+  // Increment 99b: each open clarification marker is its own pending item, and replaces the line's generic one (an unchecked item, a TODO).
+  const addClarifications = (node: Nodes) => {
+    const start = node.position?.start.offset, end = node.position?.end.offset;
+    if (start === undefined || end === undefined) return;
+    const code: [number, number][] = [];
+    const collect = (child: Nodes) => {
+      if (child.type === 'inlineCode' && child.position) code.push([child.position.start.offset!, child.position.end.offset!]);
+      else if ('children' in child) for (const grandchild of child.children) collect(grandchild);
+    };
+    collect(node);
+    for (const match of text.slice(start, end).matchAll(CLARIFICATION_MARKER)) {
+      const offset = start + match.index, question = match[1].replace(/\s+/g, ' ').trim();
+      if (code.some(([from, to]) => offset >= from && offset < to) || PLACEHOLDER_QUESTION.test(question)) continue;
+      const source = location(offset, match[0].length);
+      if (pendingLines.has(source.line) && !markerLines.has(source.line)) {
+        const generic = pending.findIndex(item => item.line === source.line && !item.clarification);
+        if (generic >= 0) pending.splice(generic, 1);
+      }
+      pendingLines.add(source.line); markerLines.add(source.line);
+      pending.push({ ...source, kind: 'pending', message: question, clarification: true });
+    }
+  };
   const walk = (node: Nodes, suppressPending = false, listType?: 'unordered' | 'ordered', inListItem = false) => {
     if (node.type === 'blockquote' || node.type === 'html') return;
     if (node.type === 'list') {
+      if (node.ordered && !inListItem && numbered.length) numberItems(node);
       const kind = node.ordered ? 'ordered' : 'unordered';
       for (const child of node.children) walk(child, suppressPending, kind, inListItem);
       return;
@@ -145,12 +199,18 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
       for (const effective of effectiveSites) {
         if (!effective.sites.paragraphs?.enabled) continue;
         let match: IdMatch | undefined;
-        try { match = effective.listMatch(value); } catch (error) { throw new Error('Line ' + node.position?.start.line + ', paragraph: ' + String(error)); }
+        try { match = effective.paragraphMatch(value); } catch (error) { throw new Error('Line ' + node.position?.start.line + ', paragraph: ' + String(error)); }
         // A bracketed ID's closing bracket is its separator (91).
-        if (match && (match.index === 1 || /^[ \t]*(?:[:\uff1a]|[-\u2013\u2014][ \t])/u.test(value.slice(match.end)))) found.push(match);
+        // A defining rule's pattern decides where its ID ends (96e), as in `2.1 The system SHALL …`.
+        if (match && (match.index === 1 || match.defines || /^[ \t]*(?:[:\uff1a]|[-\u2013\u2014][ \t])/u.test(value.slice(match.end)))) found.push(match);
       }
       if (found.length > 1) throw new Error('Line ' + node.position?.start.line + ', paragraph: Ambiguous definition site: ' + found.map(item => item.id).join(', ') + '.');
       if (found[0]) addDefinition(site, found[0], value.split('\n')[0].trim(), 'start', ['text']);
+      // 96e: criteria written on consecutive lines form one paragraph, so a defining rule also defines at each later line start.
+      if (found[0]?.defines) for (let at = value.indexOf('\n'); at >= 0; at = value.indexOf('\n', at + 1)) {
+        const line = value.slice(at + 1), next = effectiveSites.find(effective => effective.sites.paragraphs?.enabled && effective.paragraphMatch(line)?.defines)?.paragraphMatch(line);
+        if (next) addDefinition(site, { ...next, index: next.index + at + 1, end: next.end + at + 1 }, line.split('\n')[0].trim(), 'start', ['text']);
+      }
     }    if (node.type === 'listItem' && node.checked !== null && node.checked !== undefined) suppressPending = node.checked;
     if (node.type === 'listItem' && listType) {
       const first = node.children[0]?.type === 'definition' ? literalText(node.children[0]) : node.children[0];
@@ -181,6 +241,7 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
         diagrams.push({ ...location(start), source: node.value });
         const bodyStart = text.indexOf('\n', start) + 1;
         for (const match of matchIds(text.slice(bodyStart, node.position?.end.offset))) {
+          if (match.defines) continue;
           occurrences.push({ ...location(bodyStart + match.index, match.end - match.index),
             id: match.id, category: match.category, kind: 'reference', label: text.slice(lineStarts[location(bodyStart + match.index).line - 1], text.indexOf('\n', bodyStart + match.index) < 0 ? text.length : text.indexOf('\n', bodyStart + match.index)).trim() });
         }
@@ -195,7 +256,9 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
         if (effective.sites.headings.mode === 'keyword') {
           const category = effective.category === undefined ? undefined : matchIds.categories?.get(effective.category);
           const result = category && keywordName(value, effective.sites.headings.keyword!, effective.sites.headings.separator);
-          if (category && result) named.push({ category, ...result });
+          // A name that another category's rule recognizes in full, such as "Parallel Example: User Story 1", makes the heading
+          // a section about that ID: it defines nothing, and the rule's match in it stays a reference (rather than one ID in two categories).
+          if (category && result && !matchIds(result.name).some(match => match.index === 0 && match.end === result.name.length && match.category.key !== category.key)) named.push({ category, ...result });
           continue;
         }
         let match: IdMatch | undefined;
@@ -210,7 +273,7 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
         definition = parent?.delta ? addRecord(node, category, name, index, value, parent)
           : deltaSection && category.deltas ? addRecord(node, category, name, index, value) : addNamed(node, category, name, index, value);
       }
-      headingStack.push({ depth: node.depth, definition });
+      headingStack.push({ depth: node.depth, definition, text: value });
       const section = /^(ADDED|MODIFIED|REMOVED|RENAMED)\s+\S/u.exec(value.trim())?.[1];
       if (section && inChange) deltaSection = { depth: node.depth, kind: section.toLowerCase() as NonNullable<Occurrence['delta']> };
     }
@@ -259,12 +322,14 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
       const start = node.position?.start.offset ?? 0;
       const raw = text.slice(start, node.position?.end.offset);
       for (const match of matchIds(raw)) {
+        if (match.defines) continue;
         const offset = start + match.index;
         if (!definitionOffsets.has(offset)) occurrences.push({ ...location(offset, match.end - match.index),
           id: match.id, category: match.category, kind: 'reference', label: text.slice(lineStarts[location(offset).line - 1], text.indexOf('\n', offset) < 0 ? text.length : text.indexOf('\n', offset)).trim() });
       }
       if (!suppressPending && node.type === 'text' && /\b(?:TODO|TO-DO|FIXME|TBC)\b/.test(node.value)) addPending(node, node.value.trim());
     }
+    if (!suppressPending && (node.type === 'paragraph' || node.type === 'heading' || node.type === 'tableCell')) addClarifications(node);
     if ('children' in node) for (const child of node.children) walk(child, suppressPending, undefined, inListItem || node.type === 'listItem');
   };
   walk(root);
@@ -292,17 +357,59 @@ export function analyzeDocument(file: string, text: string, matchIds: IdMatcher 
     if (scope) item.scope = scope;
   }
   for (const [child, parent] of parentLinks) child.owner = { id: parent.id, offset: parent.offset, ...(parent.scope ? { scope: parent.scope } : {}) };
+  tagSections(root, occurrences, location, pending);
   assignReferenceOwners(root, occurrences, definitionsBySite, idTables, pending);
-  extractStatuses(root, definitionsBySite, text, location, matchIds.statusSites, matchIds.statusSitesByCategory, matchIds.statuses);
-  return { file, occurrences, pending, diagrams };
+  const unmappedMarkers = extractStatuses(root, definitionsBySite, text, location, matchIds.statusSites, matchIds.statusSitesByCategory, matchIds.statuses);
+  return { file, occurrences, pending, diagrams, ...(Object.keys(unmappedMarkers).length ? { unmappedMarkers } : {}) };
 }
 
+/** Increment 96f: definitions (and change records, which may become definitions) take the tags of their category's
+ * section headings that enclose them at any level; a definition's own heading names it, so it is not a section. */
+function tagSections(root: Root, occurrences: Occurrence[], location: (offset: number, length?: number) => SourceLocation, pending: Finding[]) {
+  const tagged = occurrences.filter(item => item.category?.sectionTags?.length && (item.kind === 'definition' || item.delta)).sort((a, b) => a.offset - b.offset);
+  if (!tagged.length) return;
+  const headings = root.children.flatMap(node => node.type === 'heading' ? [{ depth: node.depth, start: node.position!.start.offset!, end: node.position!.end.offset!, display: sectionHeadingDisplay(toString(node)) }] : [])
+    .map(heading => ({ ...heading, text: heading.display.toLocaleLowerCase() }));
+  // 96g: pattern entries are compiled once per document; a heading whose captures give an invalid tag is reported once.
+  const regexes = new Map<SectionTag, RegExp>(), reported = new Set<string>();
+  const tagOf = (entry: SectionTag, heading: (typeof headings)[number]) => {
+    if (entry.heading !== undefined) return heading.text === sectionHeadingText(entry.heading) ? entry.tag : undefined;
+    let regex = regexes.get(entry); if (!regex) regexes.set(entry, regex = sectionTagRegex(entry));
+    const tag = sectionPatternTag(entry, regex, heading.display);
+    if (tag === undefined || SECTION_TAG.test(tag)) return tag;
+    if (!reported.has(`${heading.start}\u0000${entry.pattern}`)) {
+      reported.add(`${heading.start}\u0000${entry.pattern}`);
+      pending.push({ ...location(heading.start, heading.end - heading.start), kind: 'consistency', message: `Heading "${heading.display}" gives the section tag "${tag}", which is not a valid tag; nothing is tagged by it. Tags use 1-64 lowercase letters, digits, colons, underscores, or hyphens.` });
+    }
+    return undefined;
+  };
+  const stack: typeof headings = [];
+  let next = 0;
+  for (const item of tagged) {
+    while (next < headings.length && headings[next].end <= item.offset) {
+      const heading = headings[next++];
+      while (stack.length && stack.at(-1)!.depth >= heading.depth) stack.pop();
+      stack.push(heading);
+    }
+    const own = next < headings.length && headings[next].start <= item.offset ? headings[next] : undefined;
+    const enclosing = own ? stack.filter(heading => heading.depth < own.depth) : stack;
+    const tags = item.category!.sectionTags!.flatMap(entry => enclosing.flatMap(heading => tagOf(entry, heading) ?? []));
+    if (tags.length) item.tags = [...new Set(tags)];
+  }
+}
+
+/** Names both categories of an ID recognized in two of them, so the message says which rules or headings to reconcile. */
+function conflictingCategories(item: Occurrence, previousKey: string, occurrences: readonly Occurrence[]) {
+  const previous = occurrences.find(other => other.category?.key === previousKey)?.category?.name ?? previousKey;
+  return `${item.id} has conflicting categories at ${item.file}:${item.line}: it is recognized both as ${previous} and as ${item.category!.name}. `
+    + 'Keep one: delete the other category, or narrow its rule or keyword heading so it no longer matches this ID; recognition is incomplete.';
+}
 /** Assign ownership after recognition, so encoded/invalid definitions never become owners. */
 function assignReferenceOwners(root: Root, occurrences: Occurrence[], sites: Map<Nodes, Occurrence>, idTables: Set<Nodes>, pending: Finding[]) {
   const categories = new Map<string, string>();
   for (const item of occurrences) if (item.category && !item.candidate) {
     const previous = categories.get(idKey(item));
-    if (previous !== undefined && previous !== item.category.key) throw new Error(`${item.id} has conflicting categories at ${item.file}:${item.line}. Assign its recognition rules to the same category; recognition is incomplete.`);
+    if (previous !== undefined && previous !== item.category.key) throw new Error(conflictingCategories(item, previous, occurrences));
     categories.set(idKey(item), item.category.key);
   }
   const references = occurrences.filter(item => item.kind === 'reference').sort((a, b) => a.offset - b.offset);
@@ -320,6 +427,7 @@ function assignReferenceOwners(root: Root, occurrences: Occurrence[], sites: Map
     for (let i = low; i < pendingByOffset.length && pendingByOffset[i].offset < end; i++) {
       const item = pendingByOffset[i];
       if (owner?.scope) item.scope = owner.scope; else delete item.scope;
+      if (owner) item.owner = owner; else delete item.owner;
     }
   };
   const assign = (node: Nodes, owner: Owner) => {
@@ -437,7 +545,7 @@ export function buildIndex(models: DocumentModel[]): ProjectIndex {
   const categories = new Map<string, string>();
   for (const item of occurrences) if (item.category) {
     const previous = categories.get(idKey(item));
-    if (previous !== undefined && previous !== item.category.key) throw new Error(`${item.id} has conflicting categories at ${item.file}:${item.line}. Assign its recognition rules to the same category; recognition is incomplete.`);
+    if (previous !== undefined && previous !== item.category.key) throw new Error(conflictingCategories(item, previous, occurrences));
     categories.set(idKey(item), item.category.key);
   }
   const definitions = occurrences.filter(item => item.kind === 'definition');
@@ -451,7 +559,9 @@ export function buildIndex(models: DocumentModel[]): ProjectIndex {
   for (const reference of references) if (!grouped.has(idKey(reference))) {
     findings.push({ ...reference, kind: 'unresolved', message: `No definition found for ${idLabel(reference)}.` });
   }
-  return aggregateStatuses({ definitions, references, findings, diagrams: models.flatMap(model => model.diagrams) });
+  const unmappedMarkers: Record<string, number> = {};
+  for (const model of models) for (const [marker, count] of Object.entries(model.unmappedMarkers ?? {})) unmappedMarkers[marker] = (unmappedMarkers[marker] ?? 0) + count;
+  return aggregateStatuses({ definitions, references, findings, diagrams: models.flatMap(model => model.diagrams), ...(Object.keys(unmappedMarkers).length ? { unmappedMarkers } : {}) });
 }
 
 export function slugHeading(value: string): string {

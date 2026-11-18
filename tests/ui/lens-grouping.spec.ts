@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { failAutosave } from './autosave-fixture';
+import { seedLegacyConfiguration } from './legacy-configuration';
 
 let app: ElectronApplication, page: Page, root: string, project: string;
 const configuration = {
@@ -81,12 +82,14 @@ test('groups fit both themes at minimum width, reset on project switch, and page
     expect(await page.locator('#lens-results').evaluate(e => e.scrollWidth <= e.clientWidth)).toBe(true);
     await expect(group('module:value:gui').locator(':scope > summary')).toBeVisible();
   }
-  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'all.md'), Array.from({ length: 260 }, (_, i) => `# REQ-${i + 10} Item`).join('\n'));
+  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'all.md'), Array.from({ length: 260 }, (_, i) => `# REQ-${i + 10} Item`).join('\n')); await seedLegacyConfiguration(other);
   await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other);
   await page.locator('#open-project').click(); await expect(page.locator('#project-heading')).toHaveText('other'); await expect(page.getByLabel('Group definitions by')).toHaveValue('none');
   await page.getByLabel('Group definitions by').selectOption('module'); await expect(group('module:missing').locator('.lens-group-count')).toHaveText('260 IDs');
   await expect(page.locator('#lens-results .lens-card')).toHaveCount(250); await group('module:missing').getByRole('button', { name: 'Show more definitions (250 of 260)' }).click(); await expect(page.locator('#lens-results .lens-card')).toHaveCount(260);
   await expect(card('REQ-269').locator('.lens-row')).toBeFocused();
+  await page.getByLabel('Group definitions by').selectOption('file'); await expect(group('file:value:all.md').locator('.lens-group-count')).toHaveText('260 IDs');
+  await expect(page.locator('#lens-results .lens-card')).toHaveCount(250); await expect(group('file:value:all.md').getByRole('button', { name: 'Show more definitions (250 of 260)' })).toBeVisible();
 });
 
 test('feature grouping keeps missing/conflicting evidence, filters, card edits and keyboard focus', async () => {
@@ -114,4 +117,27 @@ test('feature grouping keeps missing/conflicting evidence, filters, card edits a
     await page.screenshot({ path: `test-results/feature-groups-${theme}.png` });
   }
   await grouping.selectOption('none'); await expect(page.locator('.lens-group')).toHaveCount(0); await expect(page.locator('#lens-results .lens-card')).toHaveCount(6);
+});
+
+test('file grouping separates same-named files, keeps source order, search, actions, and unsaved edits', async () => {
+  await mkdir(path.join(project, 'one')); await mkdir(path.join(project, 'two'));
+  await writeFile(path.join(project, 'one/tasks.md'), '# REQ-12 Later\n# REQ-11 Earlier\n');
+  await writeFile(path.join(project, 'two/tasks.md'), '# REQ-21 Other\n');
+  await page.locator('#refresh').click(); await expect(card('REQ-21')).toBeVisible();
+  const grouping = page.getByLabel('Group definitions by'); await grouping.selectOption('file');
+  await expect(page.locator('.lens-group > summary')).toHaveText(['a.md3 IDs', 'b.md2 IDs', 'c.md1 ID', 'one/tasks.md2 IDs', 'two/tasks.md1 ID']);
+  await expect(page.locator('.lens-group-total')).toContainText('8 distinct IDs matching filters. An ID defined in several files appears in each of them.');
+  await expect(card('REQ-3')).toHaveCount(2);
+  expect(await group('file:value:one/tasks.md').locator('.lens-card').evaluateAll(cards => cards.map(c => (c as HTMLElement).dataset.id))).toEqual(['REQ-12', 'REQ-11']);
+  const summary = group('file:value:two/tasks.md').locator(':scope > summary');
+  await summary.focus(); await page.keyboard.press('Enter'); await expect(group('file:value:two/tasks.md')).not.toHaveAttribute('open');
+  await page.getByLabel('Search IDs').fill('REQ-21');
+  await expect(page.locator('.lens-group > summary')).toHaveText(['two/tasks.md1 ID']); await expect(group('file:value:two/tasks.md')).not.toHaveAttribute('open');
+  await summary.focus(); await page.keyboard.press('Enter'); await expect(card('REQ-21')).toBeVisible();
+  await card('REQ-21').locator('.lens-row').click(); await expect(page.locator('#document-path')).toHaveText('two/tasks.md');
+  await card('REQ-21').getByRole('button', { name: 'All occurrences of REQ-21', exact: true }).click(); await expect(page.locator('#references-panel')).toBeVisible();
+  await page.getByLabel('Search IDs').fill(''); await failAutosave(app);
+  await page.locator('.cm-content').click(); await page.keyboard.press('Control+End'); await page.keyboard.insertText('\n# REQ-22 Unsaved\n');
+  await expect(group('file:value:two/tasks.md').locator('.lens-group-count')).toHaveText('2 IDs');
+  await grouping.selectOption('none'); await expect(page.locator('.lens-group')).toHaveCount(0);
 });

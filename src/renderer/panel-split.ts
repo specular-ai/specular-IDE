@@ -10,7 +10,8 @@ export class PanelSplit {
   private readonly observer: ResizeObserver;
 
   constructor(private readonly container: HTMLElement, private readonly divider: HTMLElement,
-    reset: HTMLButtonElement, private readonly resized: () => void) {
+    reset: HTMLButtonElement, private readonly resized: () => void,
+    private readonly changed: (ratio: number | undefined) => void = () => {}) {
     divider.onpointerdown = event => {
       if (event.button !== 0 || !event.isPrimary || this.drag) return;
       // Keep editor and browser preview selections intact while capturing the drag.
@@ -42,10 +43,11 @@ export class PanelSplit {
       else if (event.key === 'Enter') this.reset();
       else return;
       event.preventDefault();
+      this.report();
     };
-    divider.ondblclick = () => this.reset();
+    divider.ondblclick = () => { this.reset(); this.report(); };
     reset.onmousedown = event => { event.preventDefault(); this.focusControl(reset); };
-    reset.onclick = () => this.reset();
+    reset.onclick = () => { this.reset(); this.report(); };
     this.observer = new ResizeObserver(() => this.layout());
     this.observer.observe(container);
     this.layout();
@@ -60,6 +62,16 @@ export class PanelSplit {
   }
 
   private reset() { this.ratio = 0.5; this.layout(); }
+
+  /** Apply a saved ratio (undefined: 50/50) without reporting it as a change. */
+  restore(ratio: number | undefined) {
+    if (this.drag) return;
+    this.ratio = ratio ?? 0.5;
+    this.layout();
+  }
+
+  /** Report a finished change; 50/50 is the default and is not stored. */
+  private report() { this.changed(this.ratio === 0.5 ? undefined : this.ratio); }
 
   private focusControl(control: HTMLElement) {
     const selection = window.getSelection();
@@ -78,6 +90,7 @@ export class PanelSplit {
     if (this.divider.hasPointerCapture(drag.id)) this.divider.releasePointerCapture(drag.id);
     document.body.classList.remove('resizing-panels');
     if (cancel) { this.ratio = drag.initialRatio; this.layout(); }
+    else if (this.ratio !== drag.initialRatio) this.report();
   }
 
   private layout() {
@@ -88,7 +101,9 @@ export class PanelSplit {
     if (!this.available) return;
     this.minimum = Math.min(0.5, MIN_PANEL_WIDTH / this.available);
     this.actualRatio = Math.max(this.minimum, Math.min(1 - this.minimum, this.ratio));
-    this.container.style.setProperty('--source-width', `${this.available * this.actualRatio}px`);
+    // CSS applies the ratio and its limits, so container resizes need no write (and no extra layout).
+    const value = String(this.ratio);
+    if (this.container.style.getPropertyValue('--source-ratio') !== value) this.container.style.setProperty('--source-ratio', value);
     const percent = Math.round(this.actualRatio * 100);
     this.divider.setAttribute('aria-valuemin', String(Math.round(this.minimum * 100)));
     this.divider.setAttribute('aria-valuemax', String(Math.round((1 - this.minimum) * 100)));

@@ -4,7 +4,7 @@ import type { SurfaceFactory } from './abstraction-views';
 export function workspaceSurface(parent: HTMLElement): SurfaceFactory {
   return (group, definitions, open) => {
     const root = document.createElement('section'); root.id = group.containerId;
-    root.className = 'relationship-map'; root.setAttribute('aria-label', `${group.title} view`); root.hidden = true;
+    root.className = 'relationship-map workspace-surface'; root.setAttribute('aria-label', `${group.title} view`); root.hidden = true;
     const navigation = document.createElement('nav'); navigation.className = 'relationship-modes';
     navigation.setAttribute('aria-label', `${group.title} views`);
     const containers = new Map<string, HTMLElement>(), buttons = new Map<string, HTMLButtonElement>();

@@ -7,7 +7,8 @@ import { CodexDiscoveryAdapter } from '../src/core/codex-discovery';
 import { ClaudeDiscoveryAdapter } from '../src/core/claude-discovery';
 import { DiscoveryRun } from '../src/core/discovery-run';
 import { Workspace } from '../src/core/workspace';
-import { compileIdMatcher } from '../src/core/id-configuration';
+import { compileIdMatcher, validateIdConfiguration } from '../src/core/id-configuration';
+import { readFileSync } from 'node:fs';
 import { draftProblems } from '../src/core/agent-tools';
 import { proxyLaunch, toolHost } from './helpers/agent-discovery-fixtures';
 
@@ -15,7 +16,8 @@ import { proxyLaunch, toolHost } from './helpers/agent-discovery-fixtures';
  * Live acceptance for increments 86a-86b: real Codex or Claude Code on local survey projects (kept outside the repository).
  * Opt in with SPECULAR_LIVE_AGENT_DISCOVERY=1 and either OPENAI_API_KEY (Codex) or SPECULAR_LIVE_AGENT=claude (the signed-in
  * Claude Code on PATH, or SPECULAR_LIVE_CLAUDE_PATH); optionally SPECULAR_LIVE_CODEX_MODEL or SPECULAR_LIVE_MODEL, and
- * SPECULAR_LIVE_PROJECTS (comma-separated paths). The report compares the proposal with each project's local configuration, an informal
+ * SPECULAR_LIVE_PROJECTS (comma-separated paths), and SPECULAR_LIVE_START_CONFIG (a project.json to start from instead of the defaults;
+ * each proposal is also written as proposal-<project>.json). The report compares the proposal with each project's local configuration, an informal
  * baseline rather than a reviewed reference. Runs recorded for both agents on 2026-10-17 (increment 86b). Since increment 87 the report
  * also holds the proposed status sites, statuses, and date rules with their measurements, and the agent's gaps; since increment 92,
  * each category's settings, the best evaluated draft, whether the submission was that draft's equal, and whether a follow-up was sent.
@@ -23,6 +25,8 @@ import { proxyLaunch, toolHost } from './helpers/agent-discovery-fixtures';
 const claude = process.env.SPECULAR_LIVE_AGENT === 'claude';
 const enabled = !!process.env.SPECULAR_LIVE_AGENT_DISCOVERY && (claude || !!process.env.OPENAI_API_KEY);
 const model = process.env.SPECULAR_LIVE_MODEL ?? process.env.SPECULAR_LIVE_CODEX_MODEL;
+const startPath = process.env.SPECULAR_LIVE_START_CONFIG;
+const startConfiguration = startPath ? validateIdConfiguration(JSON.parse(readFileSync(path.resolve(startPath), 'utf8'))) : undefined;
 const projects = (process.env.SPECULAR_LIVE_PROJECTS?.split(',') ?? ['examples/cache-data', 'examples/swift-secp256k1', '../specular-tests/go-workflow', '../specular-tests/pyArchimate']).map(p => path.resolve(p.trim()));
 
 test('live agentic discovery on survey projects', { skip: !enabled, timeout: 60 * 60_000 }, async () => {
@@ -36,7 +40,9 @@ test('live agentic discovery on survey projects', { skip: !enabled, timeout: 60 
       const workspace = await Workspace.open(project), snapshot = await workspace.snapshot();
       const hand = snapshot.idConfiguration!.configuration;
       // Start from the defaults, as on a project without configuration; the local configuration is the reference.
-      const configuration = { version: 1 as const, categories: [{ key: 'requirements', name: 'Requirements', role: 'requirement' as const }], rules: [{ key: 'req', category: 'requirements', prefix: 'REQ' }] };
+      // SPECULAR_LIVE_START_CONFIG (a project.json) starts every project from that draft instead, such as a reviewed
+      // Discover by patterns result, as when a user runs the agent after pattern discovery.
+      const configuration = startConfiguration ?? { version: 1 as const, categories: [{ key: 'requirements', name: 'Requirements', role: 'requirement' as const }], rules: [{ key: 'req', category: 'requirements', prefix: 'REQ' }] };
       const progress: string[] = [], started = Date.now();
       const run = new DiscoveryRun({ adapter: claude ? new ClaudeDiscoveryAdapter({ executable: process.env.SPECULAR_LIVE_CLAUDE_PATH ?? '', runRoot: path.join(root, 'claude-runs') }) : new CodexDiscoveryAdapter(connection), host: await toolHost({ documents: snapshot.documents, configuration }), proxy: await proxyLaunch(), model, progress: m => progress.push(m) });
       const result = await run.start(); await run.stopped();
@@ -52,6 +58,9 @@ test('live agentic discovery on survey projects', { skip: !enabled, timeout: 60 
         best: result.best, followUp: result.followUp ?? false, submittedBest: result.proposal && result.best ? draftProblems(result.proposal.evaluation).problems <= result.best.problems : undefined };
       // pyArchimate: SonarQube and ruff codes beside its Spec Kit IDs must not become records.
       if (result.proposal && path.basename(project) === 'pyArchimate') entry.lintCodesRecognized = compileIdMatcher(result.proposal.configuration)('Rules S1172, PT009 and UP045.').map(match => match.id);
+      if (startPath) entry.startConfiguration = path.resolve(startPath);
+      // The proposed configuration as a project.json, to be measured against a reference outside this test.
+      if (result.proposal) await writeFile(path.join(root, `proposal-${path.basename(project)}.json`), JSON.stringify(result.proposal.configuration, null, 2));
       report.push(entry);
       await writeFile(path.join(root, 'report.json'), JSON.stringify(report, null, 2));
     }

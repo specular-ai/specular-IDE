@@ -22,9 +22,9 @@ Specular is a research prototype for Windows, built with TypeScript and Electron
 
 When coding agents write much of the code, developers need to keep track of what the project is meant to do and how it is evolving. A³D addresses this with **development abstractions**: task-oriented views that each answer a developer question, such as *which design decisions and tasks address this requirement?* (the project map above) or *where is this requirement defined, and what is its status?* (the ID cards in Project Lens).
 
-Abstractions are built on **development models**, which are extracted from the project's artefacts and keep traces back to them. Specular currently builds a *project model* (IDs, their categories, statuses, modules, features and relationships) and a *physical model* (folders, files and current Markdown text). The same model can serve several abstractions, and every element of an abstraction leads back to the source text that supports it.
+Abstractions are built on **development models**, which are extracted from the project's artefacts and keep traces back to them. Specular currently builds a *project model* (IDs, their categories, statuses, modules, features and relationships), a *physical model* (folders, files and current Markdown text) and an *activity model* (what Claude Code and Codex did in the project, from their local logs). The same model can serve several abstractions, and every element of an abstraction leads back to the source text that supports it.
 
-New abstractions are plugins: they declare the models they need and receive them through the plugin SDK. The [catalogue of development abstractions](https://github.com/specular-ai/catalogue) describes the abstractions and models in more detail, including ones not yet implemented, such as evidence coverage and agent activity maps.
+New abstractions are plugins: they declare the models they need and receive them through the plugin SDK. In Specular they are listed under **Available abstractions** in Project Lens and installed or managed from the **Abstractions** menu. The [catalogue of development abstractions](https://github.com/specular-ai/catalogue) describes the abstractions and models in more detail, including ones not yet implemented, such as evidence coverage and agent activity maps.
 
 ## Getting started
 
@@ -41,12 +41,14 @@ On the start screen, choose **Try the demo project** for an editable focus-timer
 
 - **Edit Markdown** with a live preview, several tabs and automatic saving. Files stay ordinary Markdown that you can version in Git and use without Specular.
 - **Follow IDs across files.** IDs such as `REQ-001` or `DD-001` are indexed project-wide: Ctrl-click or F12 jumps to a definition, Shift-F12 lists references. **Project Lens** shows a card per ID with its status, module, feature and every occurrence.
-- **Explore relationships.** Choose **Explore map** on a card for a focused requirement → design → task graph, or **Dependency overview** for every ID and connection. Each connection links to the source text that records it.
+- **Explore the project map.** Choose **Explore map** on a card for a focused requirement → design → task graph, and switch to **Overview** for every ID and connection. Each connection links to the source text that records it.
+- **Review a feature.** The **Feature dossier** shows one feature's IDs by role, with their statuses, definition excerpts, links, recent dates and files.
+- **See what agents did.** Once **Agent setup > Read agent sessions for this project** is on, **Agent activity** lists Claude Code and Codex sessions, the files they read and wrote, and the commands they ran, with failures marked and filterable.
 - **See diagrams.** Mermaid blocks (state machines, class diagrams, user journeys, flowcharts, ...) render in the preview and in a separate **Diagrams** view that links back to their source.
 - **Find what is pending.** The **Issues** tab lists pending items, duplicate IDs and references to IDs that are never defined.
 - **Configure your project's conventions.** In **Project Lens > Project configuration**, define ID categories and recognition rules, statuses, modules and features, or let a coding agent propose them. Settings are stored in `.specular/project.json`. See the [configuration guide](docs/project-ids.md).
 - **Work with agents.** Open PowerShell, Command Prompt, Codex or Claude Code terminals in the project. Select text and choose **Prepare agent brief** to assemble an instruction with its source context, review it, then send it to the built-in read-only Codex chat or insert it into an agent terminal. Agent software is installed separately; the chat needs an OpenAI API key.
-- **Extend it with plugins.** New views can be built against the public plugin SDK, without Specular's source, and installed from **Project Lens > Install plugin folder...**. See the [SDK guide](packages/plugin-api/README.md) and the [example plugins](examples/plugins/plugin-template/README.md).
+- **Extend it with abstractions.** New abstractions (plugins) can be built against the public plugin SDK, without Specular's source, and installed from **Abstractions > Install abstraction folder…**. See the [SDK guide](packages/plugin-api/README.md) and the [example plugins](examples/plugins/plugin-template/README.md).
 
 Statuses, links and tasks show what the documents say, not verified facts about the implementation.
 
@@ -65,7 +67,7 @@ Tests that make model requests are skipped unless explicitly enabled with an API
 | --- | --- |
 | `src/` | Application source: core analysis, Electron main process, renderer |
 | `packages/plugin-api/` | Public plugin SDK |
-| `bundled-plugins/` | Relationships views, shipped as a plugin |
+| `bundled-plugins/` | Abstractions shipped with Specular: Project map, Feature dossier, Agent activity |
 | `examples/` | Demo projects and example plugins |
 | `docs/` | User documentation |
 | `tests/` | Unit and desktop tests |

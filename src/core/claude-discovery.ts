@@ -7,6 +7,9 @@ import type { AdapterRun, AgentAdapter } from './discovery-run';
 
 const obj = (v: unknown): Record<string, any> => v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, any> : {};
 export const CLAUDE_TOOL_PREFIX = 'mcp__specular__';
+const OFFERED = new Set(AGENT_TOOLS.map(tool => CLAUDE_TOOL_PREFIX + tool.name));
+/** Increment 107: the instructions name the tools bare (`read_markdown`), as Codex sees them; Claude Code exposes them with the server prefix. */
+export const CLAUDE_TOOL_NAMES = `\nTool names: in this session each Specular tool is named with the prefix ${CLAUDE_TOOL_PREFIX}, so read_markdown is ${CLAUDE_TOOL_PREFIX}read_markdown and submit_proposal is ${CLAUDE_TOOL_PREFIX}submit_proposal. Call them by these full names; other names are not tools.\n`;
 /**
  * Headless Claude Code flags for discovery (86b probe, `scripts/probe-claude-mcp.mts`): no built-in tools, only the
  * per-run MCP configuration, no settings files, hooks, skills, or slash commands, and anything not allowed is refused.
@@ -46,7 +49,7 @@ export class ClaudeDiscoveryAdapter implements AgentAdapter {
       if (agent.status !== 'detected' || !agent.path) throw new Error('Claude Code is not available. Check its installation in Agent setup, then retry.');
       const mcpConfig = path.join(directory, 'mcp.json'), promptFile = path.join(directory, 'system-prompt.md');
       await writeFile(mcpConfig, JSON.stringify({ mcpServers: { specular: { type: 'stdio', command: run.mcp.command, args: run.mcp.args, env: run.mcp.env } } }));
-      await writeFile(promptFile, run.instructions);
+      await writeFile(promptFile, run.instructions + CLAUDE_TOOL_NAMES);
       const args = claudeArguments(mcpConfig, promptFile, run.model);
       const env: NodeJS.ProcessEnv = { ...(this.options.env ?? process.env) }; delete env.ELECTRON_RUN_AS_NODE;
       if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(agent.path)) {
@@ -72,7 +75,9 @@ export class ClaudeDiscoveryAdapter implements AgentAdapter {
       if (message.type === 'assistant') {
         for (const block of Array.isArray(obj(message.message).content) ? obj(message.message).content : []) {
           const item = obj(block);
-          if (item.type === 'tool_use' && (typeof item.name !== 'string' || !item.name.startsWith(CLAUDE_TOOL_PREFIX))) run.violation(`Claude Code attempted the tool "${String(item.name)}", which discovery does not allow.`);
+          // 107: a tool the session does not offer (the init check ensures it offers only the Specular tools) is refused by Claude Code,
+          // which answers with an error the agent can act on, so the run goes on; a bare `read_markdown` is the usual case.
+          if (item.type === 'tool_use') { if (typeof item.name !== 'string' || !OFFERED.has(item.name)) run.refused(String(item.name).slice(0, 128)); }
           // `<synthetic>` messages repeat errors that the result reports.
           else if (item.type === 'text' && obj(message.message).model !== '<synthetic>' && typeof item.text === 'string' && item.text.trim()) run.progress(item.text.trim().slice(0, 4000), 'agent');
         }

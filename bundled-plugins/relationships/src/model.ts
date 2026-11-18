@@ -10,7 +10,9 @@ export interface Occurrence {
 /** A link recorded by the project model: `to` is mentioned in the section defining `from`. */
 export interface Link { from: string; to: string; evidence: Occurrence[] }
 export interface ProjectIndex {
-  configurationRevision?: string; definitions: Occurrence[]; references: Occurrence[]; findings: never[]; diagrams: never[];
+  configurationRevision?: string;
+  /** 2.3.0: the host's effective traceability layers, when it supplies them; otherwise roles decide. */
+  layers?: { name: string; categories: string[] }[]; definitions: Occurrence[]; references: Occurrence[]; findings: never[]; diagrams: never[];
   /** The model's relationships, with evidence resolved to the reference occurrences above. */
   links: Link[]; linkOf: Map<Occurrence, Link>; unownedMentions: number;
 }
@@ -35,6 +37,7 @@ export function projectIndex(models: Models): ProjectIndex {
     }
     return link;
   }) : [];
-  return { configurationRevision: project.provenance.configurationRevision, definitions: occurrences.filter(o => o.kind === 'definition'), references, findings: [], diagrams: [],
+  const layers = project.configuration.layers?.map(layer => ({ name: layer.name, categories: [...layer.categories] }));
+  return { configurationRevision: project.provenance.configurationRevision, ...(layers ? { layers } : {}), definitions: occurrences.filter(o => o.kind === 'definition'), references, findings: [], diagrams: [],
     links, linkOf, unownedMentions: project.ready ? project.unownedMentions : 0 };
 }

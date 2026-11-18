@@ -56,7 +56,7 @@ test('a labelled-list rule turns cited numbers into references, and paragraph de
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('1.1');
   // Paragraph definitions are off until enabled for the project.
   await page.locator('#project-config-open').click(); await selectConfigurationTab(page, 'definition-sites');
-  const paragraphs = page.locator('#config-definition-sites').getByRole('checkbox', { name: 'Enable paragraph definitions', exact: true });
+  const paragraphs = page.locator('#config-definition-sites').getByRole('checkbox', { name: 'ID definitions in paragraphs', exact: true });
   await expect(paragraphs).not.toBeChecked(); await paragraphs.check();
   await preview();
   await expect(page.locator('#config-summary')).toContainText('2 definitions · 3 references · 0 unresolved references');

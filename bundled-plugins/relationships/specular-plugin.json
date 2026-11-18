@@ -1,8 +1,8 @@
 {
   "manifestVersion": 1,
   "id": "specular.relationships",
-  "title": "Relationships",
-  "version": "2.1.0",
+  "title": "Project map",
+  "version": "2.3.0",
   "api": ">=0.2.0 <0.3.0",
   "customApi": 1,
   "entry": "dist/index.js",

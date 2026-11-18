@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pluginFrame } from './plugin-frame';
 import { failAutosave } from './autosave-fixture';
+import { menuAction, openOverview } from './menu-action';
+import { seedLegacyConfiguration } from './legacy-configuration';
 let app: ElectronApplication, page: Page, project: string, root: string;
 const text = '# REQ-001 - First requirement\nSome text.\n';
 const base = { manifestVersion: 1, id: 'test.plugin', version: '0.1.0', api: '0.2.0', entry: 'index.js', capabilities: ['workspace.read', 'source.navigate'], models: ['project@1', 'physical@1'], views: [{ id: 'definitions', title: 'Test plugin', kind: 'list' }] };
@@ -15,6 +17,7 @@ async function launch(contents = text, extra: Record<string, string> = {}) {
   }
   const env = Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== 'ELECTRON_RUN_AS_NODE' && v !== undefined)) as Record<string, string>;
   const args = ['--project=' + project];
+  await seedLegacyConfiguration(project);
   app = await electron.launch({ ...(process.env.SPECULAR_TEST_PACKAGED ? { executablePath: path.resolve('out', `Specular-${process.platform}-${process.arch}`, 'Specular.exe'), args } : { args: ['.', ...args] }), env: { ...env, SPECULAR_USER_DATA: path.join(root, 'user-data') } });
   page = await app.firstWindow(); await expect(page.locator('#lens-results .lens-card').first()).toBeVisible();
   await failAutosave(app);
@@ -27,7 +30,7 @@ async function relaunch() {
 }
 async function choose(directory: string) {
   await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] }); }, directory);
-  await page.locator('#plugin-view-open').click();
+  await menuAction(app, 'plugin-install-folder');
   await expect(page.locator('.plugin-view')).toBeVisible();
 }
 async function fixture(code: string, kind = 'list', capabilities = base.capabilities, manifest: Record<string, unknown> = {}) {
@@ -82,7 +85,8 @@ test('independently built project timeline collects dated entries from every pro
   for (const ignored of ['Invalid', 'Quoted', 'Fenced', 'Undated', '2020-01-01']) await expect(frame.locator('#project-timeline')).not.toContainText(ignored);
   await expect(frame.locator('#timeline-file option')).toHaveText(['All files', 'notes.md', 'requirements.md', 'specs/notes.md']);
   await expect(frame.locator('#timeline-id option')).toHaveText(['All mentioned IDs', 'DD-001', 'REQ-001', 'TASK-007']);
-  await expect(frame.locator('.timeline-scope')).toContainText('claim no time-of-day ordering');
+  // 0.7.0: the format and scope notes moved to the README; no in-view section remains.
+  await expect(frame.locator('.timeline-scope')).toHaveCount(0);
   // Startup opens notes.md, so requirements.md and specs/notes.md are discovered without being opened.
   await expect(page.locator('#document-path')).toHaveText('notes.md');
   // Unsaved editor text joins the project collection without reaching disk.
@@ -104,8 +108,12 @@ test('project timeline filters and counts events, states no matches, and keeps f
   await expect(frame.locator('#timeline-summary')).toContainText('2 of 5 event(s) from 1 of 3 contributing file(s)');
   await frame.locator('#project-timeline').getByRole('button', { name: 'Show all events', exact: true }).click();
   await expect(frame.locator('.timeline-event')).toHaveCount(5);
+  // 0.7.0: Mentioned ID and Status sit behind the collapsed More filters toggle.
+  await expect(frame.locator('.timeline-more')).not.toHaveAttribute('open', '');
+  await frame.locator('.timeline-more > summary').click();
   await frame.locator('#timeline-id').selectOption('REQ-001');
   await expect(frame.locator('.timeline-event')).toHaveCount(2);
+  await expect(frame.locator('.timeline-more > summary')).toHaveText('More filters (1 active)');
   await frame.locator('#timeline-file').selectOption('notes.md');
   await expect(frame.locator('.timeline-event')).toHaveCount(1);
   await expect(frame.locator('#timeline-summary')).toContainText('1 of 5 event(s) from 1 of 3 contributing file(s)');
@@ -204,6 +212,7 @@ test('project timeline shows dated statuses from the project model with type and
   await expect(frame.locator('.timeline-event')).toHaveCount(1);
   await expect(frame.locator('.timeline-event')).toContainText('Follow-up for REQ-001');
   await frame.locator('#timeline-kind').selectOption('');
+  await frame.locator('.timeline-more > summary').click();
   await frame.locator('#timeline-status').selectOption('Unused');
   await expect(frame.locator('.timeline-event')).toHaveCount(0);
   await expect(frame.locator('#project-timeline')).toContainText('No events match these filters.');
@@ -245,12 +254,12 @@ test('project timeline package replaces its own installed identity and keeps the
   await expect(frame.locator('.timeline-event')).toHaveCount(5);
   // Selecting the same identity again is an explicit replacement, not a second package.
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
-  await page.locator('#plugin-view-open').click();
+  await menuAction(app, 'plugin-install-folder');
   await expect(page.locator('#toast')).toBeHidden();
-  await page.locator('#plugin-manager-open').click();
+  await menuAction(app, 'plugin-manager');
   const item = page.locator('.plugin-manager-item').filter({ hasText: 'example.document-timeline' });
   await expect(item).toHaveCount(1);
-  await expect(item).toContainText('v0.6.0');
+  await expect(item).toContainText('v0.7.0');
   await expect(item).toContainText('1 view(s) · workspace.read, source.navigate');
   await item.getByRole('button', { name: 'Open', exact: true }).click();
   const replaced = await pluginFrame(app, '#project-timeline');
@@ -297,8 +306,10 @@ test('custom plugin owns an isolated interactive interface and uses validated so
     root.querySelector('#filter').onkeydown=e=>root.querySelector('#filter').dataset.lastKey=e.key;
     paint(request); return {update:paint};
   }`, 'custom');
-  const openBounds = await page.locator('#plugin-view-open').boundingBox(), loadedBounds = await page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])').boundingBox(), dependencyBounds = await page.locator('#dependency-overview-open').boundingBox();
-  expect(openBounds && loadedBounds && loadedBounds.y >= openBounds.y + openBounds.height + 4).toBe(true);
+  // The shortcuts scroll inside a bounded list; with two bundled plugins (93) the test plugin's shortcut starts below its fold.
+  await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').scrollIntoViewIfNeeded();
+  const openBounds = await page.locator('.lens-abstractions-title').boundingBox(), loadedBounds = await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').boundingBox(), dependencyBounds = await page.locator('.lens-tabs').boundingBox();
+  expect(openBounds && loadedBounds && loadedBounds.y >= openBounds.y + openBounds.height).toBe(true);
   expect(loadedBounds && dependencyBounds && dependencyBounds.y >= loadedBounds.y + loadedBounds.height + 4).toBe(true);
   const custom = (script: string) => app.evaluate(async ({ webContents }, script) => {
     const contents = webContents.getAllWebContents();
@@ -334,18 +345,18 @@ test('custom interface crash removes its surface and close/reopen creates a fres
   await expect(page.locator('.plugin-view [role=status]')).toContainText('process stopped');
   await expect.poll(() => app.evaluate(({ webContents }) => webContents.getAllWebContents().filter(item => item.getURL().startsWith('specular-plugin')).length)).toBe(0);
   await page.getByRole('button', { name: 'Close Test plugin', exact: true }).click();
-  await page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])').click();
+  await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').click();
   await expect(page.locator('.plugin-view [role=status]')).toContainText('isolated read-only interface');
 });
 test('project switching revokes a custom surface and reopening receives only the new project', async () => {
   await launch(); await fixture(`export function activate({root,request}){const paint=r=>root.textContent=r.models.physical.documents.map(d=>d.text).join('');paint(request);return {update:paint}}`, 'custom');
   await expect(page.locator('.plugin-view [role=status]')).toContainText('isolated read-only interface');
-  const second = path.join(root, 'second-custom'); await mkdir(second); await writeFile(path.join(second, 'requirements.md'), '# REQ-099 - Second project\n');
+  const second = path.join(root, 'second-custom'); await mkdir(second); await writeFile(path.join(second, 'requirements.md'), '# REQ-099 - Second project\n'); await seedLegacyConfiguration(second);
   await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] }); }, second);
   await page.evaluate(() => document.querySelector<HTMLButtonElement>('#open-project')!.click());
   await expect(page.locator('#lens-results .lens-card').first()).toContainText('REQ-099');
   await expect.poll(() => app.evaluate(({ webContents }) => webContents.getAllWebContents().filter(item => item.getURL().startsWith('specular-plugin')).length)).toBe(0);
-  await page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])').click();
+  await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').click();
   await expect(page.locator('.plugin-view [role=status]')).toContainText('isolated read-only interface');
   await expect.poll(() => app.evaluate(async ({ webContents }) => {
     const view = webContents.getAllWebContents().find(item => item.getURL().includes('/custom.html'));
@@ -366,9 +377,9 @@ test('a plugin built for API 0.1 is reported incompatible and never runs', async
   await writeFile(path.join(directory, 'specular-plugin.json'), JSON.stringify(legacy));
   await writeFile(path.join(directory, 'index.js'), 'throw new Error("LEGACY ENTRY MUST NOT RUN");');
   await app.evaluate(({ dialog }, value) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [value] }); }, directory);
-  await page.locator('#plugin-view-open').click();
+  await menuAction(app, 'plugin-install-folder');
   await expect(page.locator('#toast')).toContainText('incompatible API range');
-  await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])')).toHaveCount(0);
+  await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])')).toHaveCount(0);
   expect(await readFile(path.join(project, 'requirements.md'), 'utf8')).toBe(text);
 });
 test('worker denies Node, DOM, bridge, file/network imports, sockets, filesystem and credentials', async () => {
@@ -407,7 +418,7 @@ for (const [name, code, expected] of [
   await launch(); await fixture(code);
   await expect(page.locator('.plugin-view [role=status]')).toContainText(expected, { timeout: 15000 });
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
-  await page.getByRole('button', { name: 'Dependency overview', exact: true }).click();
+  await openOverview(page);
   await expect((await pluginFrame(app)).locator('#dependency-overview')).toBeVisible();
   expect(await readFile(path.join(project, 'requirements.md'), 'utf8')).toBe(text);
 });
@@ -423,12 +434,12 @@ test('graph nodes and edges expose validated source evidence through shared rend
 test('project switching revokes the runtime and reopening uses only the new project', async () => {
   await launch(); await choose((await readFile('.cache/plugin-sdk/example-path.txt', 'utf8')).trim());
   await expect(page.locator('.plugin-list-item')).toContainText('REQ-001');
-  const second = path.join(root, 'second'); await mkdir(second); await writeFile(path.join(second, 'requirements.md'), '# REQ-099 - Second project\n');
+  const second = path.join(root, 'second'); await mkdir(second); await writeFile(path.join(second, 'requirements.md'), '# REQ-099 - Second project\n'); await seedLegacyConfiguration(second);
   await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] }); }, second);
   await page.locator('#open-project').click();
   await expect(page.locator('#lens-results .lens-card').first()).toContainText('REQ-099');
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
-  await page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])').click();
+  await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').click();
   await expect(page.locator('.plugin-list-item')).toContainText('REQ-099');
   await expect(page.locator('.plugin-view')).not.toContainText('REQ-001');
 });
@@ -438,7 +449,7 @@ test('renderer process crash is reported and close/reopen starts a fresh sandbox
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => !w.isVisible())!.webContents.forcefullyCrashRenderer());
   await expect(page.locator('.plugin-view [role=status]')).toContainText('process stopped');
   await page.getByRole('button', { name: 'Close Specification index', exact: true }).click();
-  await page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])').click();
+  await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').click();
   await expect(page.locator('.plugin-list-item')).toContainText('REQ-001');
 });
 
@@ -447,7 +458,7 @@ test('closing during module activation releases the pending request and permits 
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(2);
   await page.getByRole('button', { name: 'Close Test plugin', exact: true }).click();
   await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)).toBe(1);
-  await page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])').click();
+  await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').click();
   await expect(page.locator('.plugin-list-item')).toContainText('Activated');
 });
 
@@ -466,7 +477,7 @@ test('unopened CRLF documents use the same plugin ranges before and after source
   await page.locator('.plugin-list-item').filter({ hasText: 'DD-001' }).getByRole('button').click();
   await expect(page.locator('#document-path')).toHaveText('z-decisions.md');
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('DD-001');
-  await page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])').click();
+  await page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])').click();
   await expect(page.locator('.plugin-list-item')).toHaveCount(2);
   expect(await readFile(path.join(project, 'z-decisions.md'), 'utf8')).toBe('padding\r\n'.repeat(40) + '# DD-001\r\nREQ-001');
 });
@@ -477,13 +488,33 @@ test('installed plugin persists, can be disabled after restart, re-enabled, and 
   await page.getByRole('tab', { name: 'requirements.md', exact: true }).click();
   await page.locator('.cm-content').click(); await page.keyboard.press('Control+End'); await page.keyboard.type('\nUnsaved plugin management check');
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(window => window.destroy())); await app.close(); await relaunch();
-  await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])')).toHaveText('Test plugin');
+  await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])')).toHaveText('Test plugin');
   await page.locator('.cm-content').click(); await page.keyboard.press('Control+End'); await page.keyboard.type('\nUnsaved plugin management check');
-  await page.locator('#plugin-manager-open').click(); await expect(page.locator('#plugin-manager-dialog')).toContainText('test.plugin');
-  await page.locator('.plugin-manager-item').filter({ hasText: 'test.plugin' }).getByRole('button', { name: 'Disable' }).click(); await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])')).toHaveCount(0);
-  await page.locator('.plugin-manager-item').filter({ hasText: 'test.plugin' }).getByRole('button', { name: 'Enable' }).click(); await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id="specular.relationships"])')).toHaveCount(1);
+  await menuAction(app, 'plugin-manager'); await expect(page.locator('#plugin-manager-dialog')).toContainText('test.plugin');
+  await page.locator('.plugin-manager-item').filter({ hasText: 'test.plugin' }).getByRole('button', { name: 'Disable' }).click(); await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])')).toHaveCount(0);
+  await page.locator('.plugin-manager-item').filter({ hasText: 'test.plugin' }).getByRole('button', { name: 'Enable' }).click(); await expect(page.locator('#loaded-plugin-views button:not([data-plugin-id^="specular."])')).toHaveCount(1);
   await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }); });
   await page.locator('.plugin-manager-item').filter({ hasText: 'test.plugin' }).getByRole('button', { name: 'Uninstall' }).click(); await expect(page.locator('.plugin-manager-item').filter({ hasText: 'test.plugin' })).toHaveCount(0);
   await expect(page.locator('.cm-content')).toContainText('Unsaved plugin management check');
   expect(await readFile(path.join(project, 'requirements.md'), 'utf8')).toBe(text);
+});
+test('the Abstractions menu manages plugins and installs a folder that opens its view', async () => {
+  await launch();
+  const labels = await app.evaluate(({ Menu }) => Menu.getApplicationMenu()!.items.find(item => item.label === 'Abstractions')!.submenu!.items.map(item => item.label));
+  expect(labels).toEqual(['Manage abstractions…', '', 'Install abstraction folder…', 'Install abstraction archive (.zip)…']);
+  await menuAction(app, 'plugin-manager');
+  await expect(page.locator('#plugin-manager-dialog')).toBeVisible();
+  await page.locator('#plugin-manager-close').click();
+  const directory = path.join(root, 'plugin'); await mkdir(directory);
+  await writeFile(path.join(directory, 'package.json'), '{"type":"module"}');
+  await writeFile(path.join(directory, 'specular-plugin.json'), JSON.stringify(base));
+  await writeFile(path.join(directory, 'index.js'), 'export function render(r){return {items:[]};}');
+  await app.evaluate(({ dialog }, directory) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [directory] }); }, directory);
+  await menuAction(app, 'plugin-install-folder');
+  await expect(page.locator('.plugin-view')).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Test plugin', exact: true })).toHaveAttribute('aria-selected', 'true');
+  // Both install dialogs then start in the folder that contained the installed abstraction.
+  await app.evaluate(({ dialog }) => { dialog.showOpenDialog = (async (...args: any[]) => { (globalThis as any).openOptions = args.at(-1); return { canceled: true, filePaths: [] }; }) as any; });
+  await menuAction(app, 'plugin-install-archive');
+  await expect.poll(() => app.evaluate(() => (globalThis as any).openOptions?.defaultPath)).toBe(root);
 });

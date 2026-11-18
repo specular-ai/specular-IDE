@@ -3,6 +3,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { failAutosave } from './autosave-fixture';
+import { seedLegacyConfiguration } from './legacy-configuration';
 import { LEGACY_ID_CONFIGURATION, type IdConfiguration } from '../../src/core/id-configuration';
 
 let app: ElectronApplication, page: Page, root: string, project: string;
@@ -29,7 +30,7 @@ test.beforeEach(async () => {
   await mkdir('.cache/configuration-tests', { recursive: true }); root = await mkdtemp(path.resolve('.cache/configuration-tests/run-'));
   project = path.join(root, 'project'); await mkdir(project);
   await writeFile(path.join(project, 'a.md'), '# REF-01 First\n\nREF-01 and REF-404.\n');
-  await writeFile(path.join(project, 'b.md'), '# REQ-01 Existing\n'); await launch();
+  await writeFile(path.join(project, 'b.md'), '# REQ-01 Existing\n'); await seedLegacyConfiguration(project); await launch();
 });
 test.afterEach(async ({}, info) => {
   if (info.status !== info.expectedStatus) {
@@ -59,14 +60,14 @@ test('create categories and rules, preview definitions and unresolved references
 test('cancel and Escape discard drafts; removing rules previews lost IDs; reset requires preview and Apply', async () => {
   await open(); await addRef(); await preview(); await page.keyboard.press('Escape');
   await expect(dialog()).not.toBeVisible(); await expect(page.locator('#metric-ids')).toHaveText('1');
-  await expect(readFile(path.join(project, '.specular/project.json'))).rejects.toThrow();
+  expect(await readFile(path.join(project, '.specular/project.json'), 'utf8')).toBe(JSON.stringify(LEGACY_ID_CONFIGURATION));
   await open(); await expect(page.locator('.config-rule')).toHaveCount(11);
-  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove rule 1', exact: true }).click(); await preview();
+  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete rule 1', exact: true }).click(); await preview();
   await expect(page.locator('#config-changes')).toContainText('1 removed IDs');
   await page.locator('#config-filter').selectOption('removed'); await expect(page.locator('#config-results')).toContainText('REQ-01');
   await page.locator('#config-reset').click(); await expect(page.locator('#config-apply')).toBeDisabled();
   await preview(); await expect(page.locator('#config-summary')).toContainText('1 definitions');
-  await page.locator('#config-cancel').click(); await expect(readFile(path.join(project, '.specular/project.json'))).rejects.toThrow();
+  await page.locator('#config-cancel').click(); expect(await readFile(path.join(project, '.specular/project.json'), 'utf8')).toBe(JSON.stringify(LEGACY_ID_CONFIGURATION));
 });
 test('advanced patterns, invalid schemas, overlapping and slow regexes cannot be applied', async () => {
   await open(); await addRef(); const rule = page.locator('.config-rule').last();
@@ -106,7 +107,7 @@ test('changed Markdown and external configuration are rechecked and cannot silen
   await open(); await addRef(); await preview();
   await writeFile(path.join(project, 'a.md'), '# REF-01 Changed\n\nREF-02\n');
   await expect(page.locator('#config-status')).toContainText('Markdown changed'); await expect(page.locator('#config-apply')).toBeDisabled();
-  await preview(); await mkdir(path.join(project, '.specular')); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(LEGACY_ID_CONFIGURATION));
+  await preview(); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(LEGACY_ID_CONFIGURATION, null, 2));
   await expect(page.locator('#config-error')).toContainText('configuration changed on disk');
   await expect(page.locator('.config-rule').last().getByLabel('Prefix', { exact: true })).toHaveValue('REF');
   await expect(page.locator('#config-apply')).toBeDisabled();
@@ -132,7 +133,8 @@ test('a suspended draft cannot leak across projects or save into a different pro
   const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-02 Other\n');
   await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other);
   await page.locator('#open-project').click(); await expect(page.locator('#project-heading')).toHaveText('other'); await open();
-  await expect(page.locator('.config-rule')).toHaveCount(11); await expect(page.locator('#config-apply')).toBeDisabled();
+  await selectConfigurationTab(page, 'categories'); await expect(page.locator('.config-category')).toHaveCount(0); await expect(page.locator('#config-categories-empty')).toBeVisible();
+  await expect(page.locator('.config-rule')).toHaveCount(0); await expect(page.locator('#config-apply')).toBeDisabled();
   const result = await page.evaluate(async root => window.specular.saveProjectConfiguration(root, { version: 1, categories: [], rules: [] }, 'absent', {}), project);
   expect(result.ok).toBe(false); expect(result.message).toContain('active project changed');
   await expect(readFile(path.join(other, '.specular/project.json'))).rejects.toThrow();
@@ -148,7 +150,7 @@ test('dialog fits a small light-mode window and supports keyboard input and canc
   await expect(page.locator('#config-apply')).toBeDisabled(); await page.keyboard.press('Escape'); await expect(dialog()).not.toBeVisible();
 });
 test('an unusable existing regex can be repaired without executing it again for comparison', async () => {
-  await mkdir(path.join(project, '.specular'));
+  await mkdir(path.join(project, '.specular'), { recursive: true });
   await writeFile(path.join(project, 'a.md'), '# REF-01\n\n' + 'a'.repeat(15000) + '!\n');
   await writeFile(path.join(project, '.specular/project.json'), JSON.stringify({ version: 1, categories: [{ key: 'requirements', name: 'Requirements' }], rules: [{ key: 'broken', category: 'requirements', pattern: '(a+)+$' }] }));
   await page.locator('#refresh').click(); await expect(page.locator('#warnings')).toContainText('was stopped', { timeout: 15000 });
@@ -196,7 +198,7 @@ test('internal category keys stay stable across renames and simple formats prefi
 
 test('existing keys stay hidden in controls, errors and previews; duplicate names keep their own rules', async () => {
   const config = { version: 1, categories: [{ key: 'privateCategory', name: 'Same name' }, { key: 'privateOther', name: 'Same name' }], rules: [{ key: 'privateRule', category: 'privateOther', prefix: 'REF' }] };
-  await mkdir(path.join(project, '.specular')); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(config));
+  await mkdir(path.join(project, '.specular'), { recursive: true }); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(config));
   await page.locator('#refresh').click(); await expect(page.locator('#metric-ids')).toHaveText('1'); await open();
   const keys = ['privateCategory', 'privateOther', 'privateRule'];
   await expectInternalKeysHidden(page, keys);
@@ -214,7 +216,7 @@ test('existing keys stay hidden in controls, errors and previews; duplicate name
   expect(saved.categories.slice(0, 2)).toEqual(config.categories); expect(new Set(saved.categories.map((c: any) => c.key)).size).toBe(4);
   expect(saved.rules[0]).toMatchObject({ key: 'privateRule', category: 'privateOther' });
   await open(); await expectInternalKeysHidden(page, keys);
-  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove category 2', exact: true }).click();
+  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete category 2', exact: true }).click();
   await expect(page.locator('.config-rule')).toHaveCount(0);
   await expect(page.locator('#config-error')).toBeHidden();
   await expectInternalKeysHidden(page, keys); await page.locator('#config-cancel').click();
@@ -226,11 +228,11 @@ test('category-owned rules preserve interleaved storage, add multiple formats, r
     rules: [{ key: 'other', category: 'second', prefix: 'REQ' }, { key: 'ref', category: 'first', prefix: 'REF' }, { key: 'feature', category: 'first', pattern: 'feature/[a-z]+' }],
     modules: [{ key: 'gui', name: 'GUI' }], statuses: [],
   };
-  await mkdir(path.join(project, '.specular')); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(configuration));
+  await mkdir(path.join(project, '.specular'), { recursive: true }); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(configuration));
   await writeFile(path.join(project, 'a.md'), '# REF-01 First\n\n# NEED-1 New need\n\n# ALT-1 Alternative\n');
   await page.locator('#refresh').click(); await expect(page.locator('#metric-ids')).toHaveText('2'); await open();
   const first = page.locator('.config-category').nth(0), second = page.locator('.config-category').nth(1);
-  await expect(dialog().getByRole('tab')).toHaveCount(7);
+  await expect(dialog().getByRole('tab')).toHaveCount(8);
   await expect(page.getByRole('tab', { name: 'ID recognition rules', exact: true })).toHaveCount(0);
   await expect(first.locator('.config-rule')).toHaveCount(2); await expect(second.locator('.config-rule')).toHaveCount(1);
   await expect(first.getByLabel('Prefix', { exact: true })).toHaveValue('REF');
@@ -247,7 +249,7 @@ test('category-owned rules preserve interleaved storage, add multiple formats, r
   await first.locator('.config-rule').last().getByLabel('Prefix', { exact: true }).fill('ALT');
   await selectConfigurationTab(page, 'discovery'); await selectConfigurationTab(page, 'categories');
   await expect(first.locator('.config-rule')).toHaveCount(4); await expect(second.locator('.config-rule')).toHaveCount(1);
-  await first.getByRole('button', { name: 'Remove rule 2', exact: true }).click();
+  await first.getByRole('button', { name: 'Delete rule 2', exact: true }).click();
   await expect(first.getByRole('button', { name: 'Add rule', exact: true })).toBeFocused();
   await expect(first.locator('.config-rule')).toHaveCount(3); await expect(second.getByLabel('Prefix', { exact: true })).toHaveValue('REQ');
   await preview(); await page.locator('#config-apply').click(); await expect(dialog()).not.toBeVisible();
@@ -262,7 +264,7 @@ test('category-owned rules preserve interleaved storage, add multiple formats, r
   await closeApp(); await launch('3'); await open();
   const restoredFirst = page.locator('.config-category').nth(0), restoredSecond = page.locator('.config-category').nth(1);
   await expect(restoredFirst.locator('.config-rule')).toHaveCount(3); await expect(restoredSecond.locator('.config-rule')).toHaveCount(1);
-  await restoredFirst.getByRole('button', { name: 'Remove rule 2', exact: true }).click(); await page.locator('#config-cancel').click();
+  await restoredFirst.getByRole('button', { name: 'Delete rule 2', exact: true }).click(); await page.locator('#config-cancel').click();
   expect(await savedConfiguration()).toEqual(saved);
 });
 
@@ -271,7 +273,7 @@ test('category Add rule controls share the project limit and nested editors fit 
     version: 1, categories: [{ key: 'one', name: 'Many rules' }, { key: 'two', name: 'Empty category' }],
     rules: Array.from({ length: 64 }, (_, i) => ({ key: `r${i}`, category: 'one', prefix: `R${String.fromCharCode(65 + i % 26)}${String.fromCharCode(65 + Math.floor(i / 26))}` })),
   };
-  await mkdir(path.join(project, '.specular')); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(configuration));
+  await mkdir(path.join(project, '.specular'), { recursive: true }); await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(configuration));
   await page.locator('#refresh').click(); await expect(page.locator('#metric-ids')).toHaveText('0');
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1120, 720));
   for (const theme of ['dark', 'light']) {
@@ -283,7 +285,7 @@ test('category Add rule controls share the project limit and nested editors fit 
     const firstRule = firstEntry.locator('.config-category-rule-list > .config-entry').first();
     await firstRule.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
     await expect(page.locator('.config-add-rule').first()).toBeDisabled(); await expect(page.locator('.config-add-rule').last()).toBeDisabled();
-    await firstRule.getByRole('button', { name: 'Remove rule 1', exact: true }).click();
+    await firstRule.getByRole('button', { name: 'Delete rule 1', exact: true }).click();
     await expect(page.locator('.config-add-rule').first()).toBeFocused(); await expect(page.locator('.config-add-rule').last()).toBeEnabled();
     const secondEntry = page.locator('#config-categories > .config-entry').last();
     await secondEntry.locator(':scope > summary').click(); await secondEntry.locator('.config-category-rules > summary').click(); await expect(secondEntry.locator('.config-category-rules-empty')).toBeVisible();
@@ -317,7 +319,7 @@ async function prepareCategoryDeletion() {
   await page.locator('#refresh').click(); await expect(page.locator('#metric-ids')).toHaveText('3'); await open();
 }
 async function removeFirstCategory() {
-  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove category 1', exact: true }).click();
+  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete category 1', exact: true }).click();
   await expect(page.locator('.config-category')).toHaveCount(2);
   await expect(page.locator('.config-rule')).toHaveCount(1);
   await expect(page.locator('.module-id-override')).toHaveCount(2);
@@ -332,13 +334,13 @@ test('override cleanup uses edited draft rules and refuses invalid recognition w
   await prepareCategoryDeletion();
   const namedRule = page.locator('.config-rule').nth(1).getByLabel('Regex pattern', { exact: true });
   await selectConfigurationTab(page, 'categories'); await namedRule.fill('(');
-  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove category 1', exact: true }).click();
+  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete category 1', exact: true }).click();
   await expect(page.locator('#config-status')).toContainText('Nothing was deleted');
   await expect(page.locator('.config-category')).toHaveCount(3); await expect(page.locator('.config-rule')).toHaveCount(3);
   await expect(page.locator('.module-id-override')).toHaveCount(6);
   await selectConfigurationTab(page, 'categories'); await namedRule.fill('feature/[a-z]+');
   await selectConfigurationTab(page, 'categories'); await page.locator('.config-rule').first().getByLabel('Prefix', { exact: true }).fill('FUTURE');
-  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove category 1', exact: true }).click();
+  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete category 1', exact: true }).click();
   await expect(page.locator('.config-category')).toHaveCount(2); await expect(page.locator('.module-id-override')).toHaveCount(3);
   await preview(); await page.locator('#config-apply').click(); await expect(dialog()).not.toBeVisible();
   expect((await savedConfiguration()).moduleOverrides.map((override: { id: string }) => override.id)).toEqual(['REF-01', 'REF-999', 'REQ-01']);
@@ -382,13 +384,13 @@ test('category deletion removes all associated rules in one draft change, suppor
 });
 
 test('deleting categories without rules and the last category preserves an explicitly empty configuration after restart', async () => {
-  await prepareCategoryDeletion(); await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove category 3', exact: true }).click();
+  await prepareCategoryDeletion(); await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete category 3', exact: true }).click();
   await expect(page.locator('.config-rule')).toHaveCount(3); await preview(); await expect(page.locator('#config-changes')).toContainText('0 removed IDs');
   await page.locator('#config-apply').click(); await expect(dialog()).not.toBeVisible();
   expect(await savedConfiguration()).toEqual({ ...deletionConfiguration, categories: deletionConfiguration.categories.slice(0, 2) });
-  await open(); await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove category 1', exact: true }).click();
+  await open(); await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete category 1', exact: true }).click();
   await expect(page.locator('.config-rule')).toHaveCount(1);
-  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Remove category 1', exact: true }).click();
+  await selectConfigurationTab(page, 'categories'); await page.getByRole('button', { name: 'Delete category 1', exact: true }).click();
   await expect(page.locator('.config-category')).toHaveCount(0); await expect(page.locator('.config-rule')).toHaveCount(0);
   await preview(); await expect(page.locator('#config-summary')).toContainText('0 definitions');
   await page.locator('#config-apply').click(); await expect(dialog()).not.toBeVisible(); await expect(page.locator('#metric-ids')).toHaveText('0');

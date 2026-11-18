@@ -1,7 +1,9 @@
 import { DEFAULT_STATUS_SITES, type StatusSites, type TextStatusSite } from '../core/status-sites';
 import type { IdConfiguration } from '../core/id-configuration';
+import { enabledGroup } from './enabled-group';
+import { explain } from './hover-hint';
 
-export function statusSiteGroups(settings: StatusSites, stage: () => void): HTMLElement[] {
+export function statusSiteGroups(settings: StatusSites, stage: () => void, scope = 'project'): HTMLElement[] {
   const checkbox = (text: string, checked: boolean, update: (value: boolean) => void) => {
     const label = document.createElement('label'), input = document.createElement('input'); input.type = 'checkbox'; input.checked = checked;
     input.onchange = () => { update(input.checked); stage(); }; label.append(input, text); return label;
@@ -12,29 +14,32 @@ export function statusSiteGroups(settings: StatusSites, stage: () => void): HTML
   };
   const names = { paragraphs: 'paragraph', tables: 'table', headings: 'heading' };
   const groups = (['paragraphs', 'tables', 'headings'] as TextStatusSite[]).map(kind => {
-    const site = settings[kind], name = names[kind], group = document.createElement('section'); group.className = 'definition-site-group';
-    const heading = document.createElement('h4'); heading.textContent = 'Statuses in ' + kind; group.append(heading);
-    group.append(checkbox('Enable ' + name + ' statuses', site.enabled, value => { site.enabled = value; }));
+    const site = settings[kind], name = names[kind];
+    const { group: section, body: group, sync } = enabledGroup(checkbox('Statuses in ' + kind, site.enabled, value => { site.enabled = value; }), { key: scope });
+    explain(section.querySelector<HTMLElement>('.config-entry-title')!, { paragraphs: 'A paragraph starting with the field label, such as Status: Done, directly under an ID heading gives that ID its status.', tables: 'The status column of the row that defines an ID gives that ID its status.', headings: 'A pattern on the text of an ID heading, such as a trailing [Done], gives that ID its status.' }[kind]);
+    // A section's fields share one row, each with its label above.
+    const row = document.createElement('div'); row.className = 'definition-site-row';
     let literal: HTMLLabelElement | undefined;
     if (kind === 'paragraphs') {
       literal = inputField('Paragraph field label', settings.paragraphs.label, 128, value => { settings.paragraphs.label = value; });
-      literal.hidden = site.mode === 'regex'; group.append(literal);
+      literal.hidden = site.mode === 'regex'; row.append(literal);
       // Increment 91: `- **Status**: DONE` under a definition, as in milestone PROGRESS.md files.
-      group.append(checkbox('Also read list items', settings.paragraphs.listItems ?? false, value => { if (value) settings.paragraphs.listItems = true; else delete settings.paragraphs.listItems; }));
+      row.append(checkbox('Also read list items', settings.paragraphs.listItems ?? false, value => { if (value) settings.paragraphs.listItems = true; else delete settings.paragraphs.listItems; }));
     }
-    if (kind === 'tables') group.append(inputField('Status column name', settings.tables.column, 128, value => { settings.tables.column = value; }));
+    if (kind === 'tables') row.append(inputField('Status column name', settings.tables.column, 128, value => { settings.tables.column = value; }));
     const advanced = document.createElement('div'); advanced.hidden = site.mode !== 'regex';
     const defaultPattern = kind === 'headings' ? DEFAULT_STATUS_SITES.headings.pattern : kind === 'paragraphs' ? '^Status:[ \t]*(?<status>[^\r\n]+)$' : '^(?<status>.+)$';
     const pattern = inputField(name[0].toUpperCase() + name.slice(1) + ' status pattern', site.pattern ?? defaultPattern, 512, value => { site.pattern = value; });
     const ignore = checkbox('Ignore case in ' + name + ' status pattern', site.ignoreCase ?? false, value => { site.ignoreCase = value; });
     const hint = document.createElement('p'); hint.className = 'config-hint';
     hint.textContent = 'Use a nonempty named (?<status>...) capture in this Markdown region. Each value retains exact source evidence. Multiple values are checked for agreement; no site takes precedence.';
-    advanced.append(pattern, ignore, hint);
+    const advancedRow = document.createElement('div'); advancedRow.className = 'definition-site-row'; advancedRow.append(pattern, ignore);
+    advanced.append(advancedRow); explain(pattern, hint.textContent!);
     if (kind !== 'headings') {
       const label = document.createElement('label'); label.textContent = kind === 'paragraphs' ? 'Paragraph status format' : 'Status cell content';
       const select = document.createElement('select'); select.setAttribute('aria-label', label.textContent);
       select.add(new Option(kind === 'paragraphs' ? 'Literal field label' : 'Full cell value', kind === 'paragraphs' ? 'literal' : 'full'));
-      select.add(new Option('Advanced pattern', 'regex')); select.value = site.mode; label.append(select); group.append(label);
+      select.add(new Option('Advanced pattern', 'regex')); select.value = site.mode; label.append(select); row.append(label);
       select.onchange = () => {
         site.mode = select.value as typeof site.mode; advanced.hidden = site.mode !== 'regex';
         if (literal) literal.hidden = site.mode === 'regex';
@@ -43,18 +48,20 @@ export function statusSiteGroups(settings: StatusSites, stage: () => void): HTML
         stage();
       };
     }
-    group.append(advanced); return group;
+    if (row.childElementCount) group.append(row);
+    group.append(advanced); sync(); return section;
   });
-  return [...groups, checkboxGroup(settings, stage, checkbox)];
+  return [...groups, checkboxGroup(settings, stage, checkbox, scope)];
 }
 
 /** Task checkbox markers (increment 88): enable the site and edit the marker-to-value mappings. */
-function checkboxGroup(settings: StatusSites, stage: () => void, checkbox: (text: string, checked: boolean, update: (value: boolean) => void) => HTMLLabelElement) {
+function checkboxGroup(settings: StatusSites, stage: () => void, checkbox: (text: string, checked: boolean, update: (value: boolean) => void) => HTMLLabelElement, scope: string) {
   // Rendering must not change the draft: the site is attached only when the user edits it.
   const site = settings.checkboxes ?? structuredClone(DEFAULT_STATUS_SITES.checkboxes!);
   const changed = () => { settings.checkboxes = site; stage(); };
-  const group = document.createElement('section'); group.className = 'definition-site-group checkbox-status-site';
-  const heading = document.createElement('h4'); heading.textContent = 'Statuses in task checkboxes';
+  // `checkbox` stages after the update, so attach the site first.
+  const { group: section, body: group, sync } = enabledGroup(checkbox('Statuses in task checkboxes', site.enabled, value => { site.enabled = value; settings.checkboxes = site; }), { key: scope, after: () => { add.disabled = rows.length >= 16; } });
+  section.classList.add('checkbox-status-site');
   const hint = document.createElement('p'); hint.className = 'config-hint';
   hint.textContent = 'For a list item that defines an ID, the character in its checkbox, such as [x] or Kiro\'s [-], becomes the status value below. Type a space for [ ]. Unchecked items with an ID are then Open tasks instead of pending work. Unmapped markers give no status.';
   const rows = Object.entries(site.markers).map(([marker, value]) => ({ marker, value }));
@@ -85,9 +92,9 @@ function checkboxGroup(settings: StatusSites, stage: () => void, checkbox: (text
   add.onclick = () => { rows.push({ marker: '', value: '' }); render(); write(); (list.lastElementChild?.querySelector('input') as HTMLInputElement | null)?.focus(); };
   add.disabled = rows.length >= 16;
   render();
-  // `checkbox` stages after the update, so attach the site first.
-  group.append(heading, checkbox('Enable checkbox statuses', site.enabled, value => { site.enabled = value; settings.checkboxes = site; }), hint, list, note, add);
-  return group;
+  explain(section.querySelector<HTMLElement>('.config-entry-title')!, hint.textContent!);
+  group.append(list, note, add); sync();
+  return section;
 }
 
 export class StatusSitesEditor {
@@ -101,6 +108,7 @@ export class StatusSitesEditor {
     intro.textContent = 'Choose where statuses are read for all IDs. Paragraphs belong directly to an ID heading and stop at the next heading. Tables use the owning ID row; heading statuses require a recognized ID definition. Status names and colors are configured in Authored statuses.';
     const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'quiet-button'; reset.textContent = 'Restore status site defaults';
     reset.onclick = () => { delete this.draft().statusSites; this.render(); this.changed(); };
-    this.root.replaceChildren(title, intro, ...statusSiteGroups(settings, stage), reset);
+    explain(title, intro.textContent!);
+    this.root.replaceChildren(title, ...statusSiteGroups(settings, stage), reset);
   }
 }

@@ -1,7 +1,7 @@
 import { keyLabel } from './id-identity.js';
 import { IdPicker } from './id-picker.js';
 import type { Occurrence, ProjectIndex } from './model.js';
-import { relationshipsFor, supportsRelationships, relationshipRole, categoryFor, relatedThroughDecisions, type RelationshipGroup } from './relationships.js';
+import { relationshipsFor, supportsRelationships, relationshipRole, categoryFor, relatedThroughNeighbours, layerOf, layerNames, type RelationshipGroup } from './relationships.js';
 
 const PAGE_SIZE = 6;
 function element<K extends keyof HTMLElementTagNameMap>(tag: K, text = '', className = '') {
@@ -28,7 +28,7 @@ export class RelationshipMap {
   private files = element('select');
   private content = element('div', '', 'map-content');
   constructor(private root: HTMLElement, private navigate: (source: Occurrence, revision: number) => void, private occurrences: (id: string) => void) {
-    root.innerHTML = '<h2>Requirements, design &amp; tasks</h2><p class="map-intro">Explore explicit requirement/design and design/task references. Select a connection to inspect its source evidence.</p>';
+    root.innerHTML = '<h2>Requirements, design &amp; tasks</h2><p class="map-intro">Explore explicit references between requirements, design decisions, and tasks. Select a connection to inspect its source evidence.</p>';
     const form = element('form', '', 'map-controls');
     const label = element('label', 'Focus ID'); label.htmlFor = this.picker.id;
     const go = element('button', 'Explore', 'button secondary'); go.type = 'button';
@@ -67,14 +67,14 @@ export class RelationshipMap {
     const parent = this.content; parent.replaceChildren();
     if (!this.ready) { parent.append(element('p', this.notice, 'map-status')); return; }
     if (this.id && ![...this.index.definitions, ...this.index.references].some(item => item.id === this.id)) {
-      parent.append(element('p', `Missing definition: ${keyLabel(this.id)}. No indexed occurrences found.`, 'coral'), element('p', 'No owned requirement/design or design/task references found for this ID.', 'map-status')); return;
+      parent.append(element('p', `Missing definition: ${keyLabel(this.id)}. No indexed occurrences found.`, 'coral'), element('p', 'No owned references between requirements, design decisions, and tasks found for this ID.', 'map-status')); return;
     }
-    if (!supportsRelationships(this.id, this.index)) { parent.append(element('p', 'Choose an ID with a requirement, design or task role to explore its connections.', 'map-status')); return; }
+    if (!supportsRelationships(this.id, this.index)) { parent.append(element('p', 'Choose an ID whose category is in a relationship layer (by default, a requirement, design or task role) to explore its connections.', 'map-status')); return; }
     const revision = this.revision, result = relationshipsFor(this.index, this.id);
     const groups = result.groups.map(group => ({ ...group, evidence: group.evidence.filter(item => !this.file || item.reference.file === this.file) })).filter(group => group.evidence.length);
     this.page = Math.min(this.page, Math.max(0, Math.ceil(groups.length / PAGE_SIZE) - 1));
     const direct = groups.slice(this.page * PAGE_SIZE, (this.page + 1) * PAGE_SIZE);
-    const through = relatedThroughDecisions(this.index, this.id, direct, this.file);
+    const through = relatedThroughNeighbours(this.index, this.id, direct, this.file);
     this.throughPage = Math.min(this.throughPage, Math.max(0, Math.ceil(through.length / PAGE_SIZE) - 1));
     const shown = [
       ...direct.map(group => ({ ...group, anchor: this.id, key: group.id })),
@@ -84,22 +84,26 @@ export class RelationshipMap {
     const back = action('Back to previous focus', () => { const id = this.history.pop(); if (id) { this.id = id; this.idPicker.value = id; this.page = 0; this.throughPage = 0; this.selected = ''; this.render(); } });
     back.disabled = !this.history.length;
     toolbar.append(back, action(`All occurrences of ${keyLabel(this.id)}`, () => this.occurrences(this.id)));
-    parent.append(toolbar, element('p', `${keyLabel(this.id)} \u00b7 Direct requirement/design and design/task connections \u00b7 ${groups.length} of ${result.groups.length} connections match the file filter. Showing ${direct.length} on page ${this.page + 1} of ${Math.max(1, Math.ceil(groups.length / PAGE_SIZE))}.`, 'map-scope'));
-    parent.append(element('p', 'Only indexed Markdown and owned references are included. A reference does not prove coverage or implementation.', 'map-intro'));
+    parent.append(toolbar, element('p', `${keyLabel(this.id)} \u00b7 Direct connections \u00b7 ${groups.length} of ${result.groups.length} connections match the file filter. Showing ${direct.length} on page ${this.page + 1} of ${Math.max(1, Math.ceil(groups.length / PAGE_SIZE))}.`, 'map-scope'));
     if (result.definitionCount !== 1) parent.append(element('p', result.definitionCount ? `${keyLabel(this.id)} has ${result.definitionCount} definitions; no target chosen.` : `Missing definition: ${keyLabel(this.id)}.`, 'coral'));
-    if (!groups.length) parent.append(element('p', result.groups.length ? 'No connections match this file filter.' : 'No owned requirement/design or design/task references found. Other mentions are available under All occurrences.', 'map-status'));
-    const headings = element('div', '', 'map-headings'); headings.append(element('strong', 'Requirements'), element('strong', 'Design decisions'), element('strong', 'Implementation tasks')); parent.append(headings);
-    const graph = element('div', '', 'map-graph'); graph.setAttribute('aria-label', `Requirement, design and task connections for ${keyLabel(this.id)}`);
+    if (!groups.length) parent.append(element('p', result.groups.length ? 'No connections match this file filter.' : 'No owned references between requirements, design decisions, and tasks found. Other mentions are available under All occurrences.', 'map-status'));
+    const graph = element('div', '', 'map-graph'); graph.setAttribute('aria-label', `Connections for ${keyLabel(this.id)}`);
     const definitions = this.index.definitions.filter(item => item.id === this.id);
     const nodes = new Map<string, { id: string; definition?: Occurrence; definitionCount: number }>();
     nodes.set(this.id, { id: this.id, definition: definitions.length === 1 ? definitions[0] : undefined, definitionCount: definitions.length });
     for (const group of shown) nodes.set(group.id, group);
-    const column = (id: string) => relationshipRole(id, this.index) === 'requirement' ? 0 : relationshipRole(id, this.index) === 'design' ? 1 : 2;
-    const columns = [0, 1, 2].map(col => [...nodes.values()].filter(node => column(node.id) === col));
+    // 100a: one column per layer in use, in layer order, spread across the width; a same-layer neighbour shares the focused ID's column.
+    const layer = (id: string) => layerOf(id, this.index) ?? 0;
+    const used = [...new Set([...nodes.values()].map(node => layer(node.id)))].sort((a, b) => a - b);
+    const x = (col: number) => used.length === 1 ? 0 : col * 720 / (used.length - 1);
+    const headings = element('div', '', 'map-headings');
+    for (const [col, at] of used.entries()) { const heading = element('strong', layerNames(this.index)[at]); heading.style.left = `${x(col) / 10}%`; headings.append(heading); }
+    parent.append(headings);
+    const columns = used.map(at => [...nodes.values()].filter(node => layer(node.id) === at));
     const height = Math.max(1, ...columns.map(items => items.length)) * 100; graph.style.height = `${height}px`;
     const positions = new Map<string, { x: number; y: number }>();
     for (const [col, items] of columns.entries()) for (const [i, item] of items.entries())
-      positions.set(item.id, { x: col * 360, y: (i + 0.5) * height / items.length });
+      positions.set(item.id, { x: x(col), y: (i + 0.5) * height / items.length });
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('viewBox', `0 0 1000 ${height}`); svg.setAttribute('preserveAspectRatio', 'none');
     const defs = document.createElementNS(svg.namespaceURI, 'defs');
     for (const [id, direction] of [['map-arrow-end', 'auto'], ['map-arrow-start', 'auto-start-reverse']]) {
@@ -126,10 +130,12 @@ export class RelationshipMap {
     for (const group of shown) {
       const a = positions.get(group.anchor)!, b = positions.get(group.id)!;
       const [left, right] = a.x < b.x ? [a, b] : [b, a];
-      const leftId = a.x < b.x ? group.anchor : group.id;
-      const midX = (left.x + 280 + right.x) / 2;
+      const leftId = a.x <= b.x ? group.anchor : group.id; // the start of the path (the anchor, for a same-column connection)
+      // 100a: a connection within one column bows out beside its cards, to the right unless that leaves the drawing, from the anchor to the other ID.
+      const same = a.x === b.x, outward = a.x + 340 <= 1000, edge = outward ? a.x + 280 : a.x;
+      const midX = same ? (outward ? a.x + 340 : a.x - 60) : (left.x + 280 + right.x) / 2;
       const line = document.createElementNS(svg.namespaceURI, 'path');
-      line.setAttribute('d', `M ${left.x + 280} ${left.y} C ${midX} ${left.y}, ${midX} ${right.y}, ${right.x} ${right.y}`);
+      line.setAttribute('d', same ? `M ${edge} ${a.y} C ${midX} ${a.y}, ${midX} ${b.y}, ${edge} ${b.y}` : `M ${left.x + 280} ${left.y} C ${midX} ${left.y}, ${midX} ${right.y}, ${right.x} ${right.y}`);
       line.setAttribute('vector-effect', 'non-scaling-stroke');
       if (group.evidence.some(item => item.from === leftId)) line.setAttribute('marker-end', 'url(#map-arrow-end)');
       if (group.evidence.some(item => item.to === leftId)) line.setAttribute('marker-start', 'url(#map-arrow-start)');
@@ -137,7 +143,9 @@ export class RelationshipMap {
       const connection = document.createElementNS(svg.namespaceURI, 'g');
       connection.setAttribute('role', 'button'); connection.setAttribute('tabindex', '0'); connection.setAttribute('aria-label', `Inspect connection ${keyLabel(group.anchor)} and ${keyLabel(group.id)}`); connection.setAttribute('aria-pressed', String(this.selected === group.key));
       const hit = document.createElementNS(svg.namespaceURI, 'rect');
-      hit.setAttribute('x', String(midX - 20)); hit.setAttribute('y', String((left.y + right.y) / 2 - 12)); hit.setAttribute('width', '40'); hit.setAttribute('height', '24'); hit.setAttribute('fill', 'transparent'); hit.setAttribute('cursor', 'pointer');
+      // A same-column curve peaks three quarters of the way to its control points; its target spans from that tip to the cards' edge.
+      const tip = 0.25 * edge + 0.75 * midX;
+      hit.setAttribute('x', String(same ? Math.min(tip, edge) - 10 : midX - 20)); hit.setAttribute('y', String((left.y + right.y) / 2 - 12)); hit.setAttribute('width', String(same ? Math.abs(edge - tip) + 20 : 40)); hit.setAttribute('height', '24'); hit.setAttribute('fill', 'transparent'); hit.setAttribute('cursor', 'pointer');
       connection.append(line, hit);
       connection.addEventListener('click', () => this.select(group.key));
       connection.addEventListener('keydown', event => { const key = (event as KeyboardEvent).key; if (key === 'Enter' || key === ' ') { event.preventDefault(); this.select(group.key); } });
@@ -149,7 +157,6 @@ export class RelationshipMap {
     const next = action('Next connections', () => { this.page++; this.throughPage = 0; this.selected = ''; this.render(); }); next.disabled = (this.page + 1) * PAGE_SIZE >= groups.length;
     paging.append(previous, next); parent.append(paging);
     if (relationshipRole(this.id, this.index) !== 'design') {
-      parent.append(element('p', `Through the decisions on this page: ${through.length} second-hop connections match the evidence file filter. Page ${this.throughPage + 1} of ${Math.max(1, Math.ceil(through.length / PAGE_SIZE))}. Missing or duplicate decisions are not expanded. Direct task/requirement and task/task links are available in Overview.`, 'map-through-scope'));
       const throughPaging = element('div', '', 'map-navigation');
       const previousThrough = action('Previous second-hop connections', () => { this.throughPage--; this.selected = ''; this.render(); }); previousThrough.disabled = this.throughPage === 0;
       const nextThrough = action('Next second-hop connections', () => { this.throughPage++; this.selected = ''; this.render(); }); nextThrough.disabled = (this.throughPage + 1) * PAGE_SIZE >= through.length;

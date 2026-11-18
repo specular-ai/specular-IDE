@@ -1,8 +1,8 @@
 import { captureLensFocus, groupDefinitions, LensGroups, type LensGrouping } from './lens-groups';
 import { FeatureAssignmentEditor } from './feature-assignment-editor';
-import { featureBadges, featureEvidence } from './feature-card';
+import { featureBadges, featureEvidence, tagBadges } from './feature-card';
 import { idKey, idLabel, keyLabel } from '../core/id-identity';
-import { LEGACY_ID_CONFIGURATION } from '../core/id-configuration';
+import { exclusionFor, LEGACY_ID_CONFIGURATION } from '../core/id-configuration';
 import { ModuleAssignmentEditor } from './module-assignment-editor';
 import { statusBadge, statusEvidence } from './statuses';
 import { moduleBadges, moduleEvidence } from './module-card';
@@ -10,6 +10,7 @@ import { styleCategoryCard } from './category-colors';
 import { applyTheme, currentAppearance } from './appearance';
 import { observeDialogLayers } from './dialog-layers';
 import { registerPluginViews } from './plugin-views';
+import { codeIcon, documentIcon, folderIcon, newFileIcon, searchIcon, viewIcon } from './icons';
 import { EditorState, Compartment } from '@codemirror/state';
 import { EditorView, keymap } from '@codemirror/view';
 import { basicSetup } from 'codemirror';
@@ -24,7 +25,6 @@ import { ProjectConfigurationDialog } from './project-configuration';
 import { relationshipsFor, supportsRelationships } from '../core/relationships';
 import { AbstractionViewHost, ViewRegistry, ViewWorkspace, type WorkspaceViewSnapshot } from './abstraction-views';
 const FOCUS_VIEW = 'plugin:specular.relationships:focus';
-const OVERVIEW_VIEW = 'plugin:specular.relationships:overview';
 import { workspaceSurface } from './view-surface';
 import { toString } from 'mdast-util-to-string';
 import { renderDiagram, renderMarkdown, markdownDiagrams } from './preview';
@@ -34,11 +34,15 @@ import { BriefDialog } from './brief-dialog';
 import { capturePreviewSelection } from './preview-selection';
 import { FileExplorer } from './file-explorer';
 import { PanelSplit } from './panel-split';
+import { SidePanelResize } from './side-panel-resize';
+import { PanelLayoutStore } from './panel-layout-store';
 import { FontSizeControls } from './font-size-controls';
 import { MarkdownSearchPanel, type SearchScope } from './markdown-search';
 import { Autosave } from '../core/autosave';
 import { RecentProjectsView } from './recent-projects';
 import { AgentSetup } from './agent-setup';
+import { SummaryService } from './summary-service';
+import { modelsFor } from './plugin-models';
 import { ConversationPanel } from './codex-conversation';
 import { TerminalPanel } from './terminal-panel';
 import './styles.css';
@@ -49,8 +53,8 @@ const $ = <T extends HTMLElement = HTMLElement>(selector: string) => document.qu
 const app = $('#app');
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><img class="brand-mark" src="./specular-logo.svg" width="48" height="48" alt="" /><span>specular<span class="prototype">PROTOTYPE 01</span></span></div>
-    <div id="project-heading" class="project-heading">A workspace for software intent</div>
+    <div class="brand"><img class="brand-mark" src="./specular-logo.svg" width="48" height="48" alt="" /><span>specular<span class="prototype">v0.3</span></span></div>
+    <div class="project-slot"><button type="button" id="project-chip" class="project-chip no-project" disabled><span class="project-chip-icon" aria-hidden="true">${folderIcon(true)}</span><span class="project-chip-label">Project</span><span id="project-heading" class="project-heading">A workspace for software intent</span></button></div>
     <button id="show-agent-setup" class="button secondary">Agent setup</button>
     <button id="show-conversation" class="button secondary">Codex chat</button>
     <button id="show-terminals" class="button secondary">Terminal</button>
@@ -61,22 +65,20 @@ app.innerHTML = `
   <div id="workbench">
   <div id="welcome" class="welcome">
     <div class="welcome-art" aria-hidden="true"><span>◇</span><span>◇</span><span>◇</span></div>
-    <div class="eyebrow">THE SPECIFICATION IS THE STARTING POINT</div>
-    <h1>Start with intent.</h1>
-    <p>Write in Markdown. Follow the connections.<br>See the system taking shape.</p>
+    <div class="eyebrow">ABSTRACTION-AUGMENTED DEVELOPMENT</div>
+    <h1>Make sense of<br>agentic projects.</h1>
+    <p>Specs, tasks and agent sessions, gathered into abstractions you can explore.<br>Steer and review the work without drowning in Markdown.</p>
     <div class="welcome-actions"><button id="welcome-open" class="button primary">Open a project <span>↗</span></button><button id="open-demo" class="button secondary">Try the demo project</button></div>
     <section id="welcome-recent" class="recent-projects" aria-label="Recent projects"></section>
-    <div class="welcome-features"><span>01 <b>Connected specifications</b>Follow IDs across your project.</span><span>02 <b>Living diagrams</b>Turn Mermaid into a view.</span><span>03 <b>Visible pending work</b>Keep open questions in sight.</span></div>
+    <div class="welcome-features"><span>01 <b>Abstractions over your artefacts</b>Feature dossiers, project maps and timelines, built from your project files.</span><span>02 <b>Fitted to your conventions</b>Configure IDs, statuses, modules and features for Spec Kit, OpenSpec, Kiro or your own style.</span><span>03 <b>Works with your agents</b>Hand reviewed context to Claude Code or Codex, and see what they did in the project.</span></div>
   </div>
   <main id="workspace" class="workspace" hidden>
     <aside class="explorer">
-      <div class="section-heading">EXPLORER<button id="refresh" class="icon-button" title="Refresh project" aria-label="Refresh project">↻</button></div>
-      <input id="file-search" class="search" aria-label="Filter files" placeholder="Filter files…" />
-      <button id="new-file" class="button secondary new-file-button" title="New Markdown file (Ctrl+N)">New Markdown file</button>
-      <button id="markdown-search-open" class="button secondary new-file-button" title="Search Markdown (Ctrl+Shift+F)">Search Markdown</button>
+      <div class="section-heading">EXPLORER<div class="explorer-actions"><button id="new-file" class="icon-button" title="New Markdown file (Ctrl+N)" aria-label="New Markdown file">${newFileIcon()}</button><button id="markdown-search-open" class="icon-button" title="Search text (Ctrl+Shift+F)" aria-label="Search text">${searchIcon()}</button><button id="refresh" class="icon-button" title="Refresh project" aria-label="Refresh project">↻</button></div></div>
+      <input id="file-search" class="search" aria-label="Filter files" placeholder="Filter files…" title="Text matches anywhere in the path. Wildcards: * within a folder, ** across folders, ? one character (*.md, specs/**/*.md)." />
       <div class="explorer-label">PROJECT FILES <span id="file-count"></span></div>
       <div id="files" class="files"></div>
-      <div class="explorer-footer"><span class="status-dot"></span> Local Markdown workspace</div>
+      <div id="explorer-resize" class="side-resize" role="separator" tabindex="0" aria-label="Explorer width" aria-orientation="vertical" title="Drag to resize the Explorer. Left/Right: adjust; Shift: fine adjustment; Home/End: limits; Enter or double-click: default width."></div>
     </aside>
     <section class="document-area">
       <div id="tabs" class="tabs" role="tablist" aria-label="Workspace tabs"></div>
@@ -93,16 +95,15 @@ app.innerHTML = `
     <aside class="inspector">
       <div class="section-heading">PROJECT LENS<button id="project-config-open" class="quiet-button" aria-label="Project configuration…" title="Project configuration" disabled>Configure…</button></div>
       <div class="metrics"><div><strong id="metric-docs">0</strong><span>documents</span></div><div><strong id="metric-ids">0</strong><span>IDs</span></div><div><strong id="metric-pending">0</strong><span>pending</span></div></div>
-      <div class="lens-plugin-actions"><button id="plugin-view-open" class="quiet-button" aria-label="Install plugin folder...">Install plugin…</button><button id="plugin-manager-open" class="quiet-button plugin-manager-open">Manage plugins...</button></div>
-      <div id="loaded-plugin-views"></div>
-      <button id="dependency-overview-open" class="button secondary dependency-overview-open">Dependency overview</button>
+      <div class="lens-abstractions"><div id="lens-abstractions-title" class="lens-abstractions-title">Available abstractions</div><div id="loaded-plugin-views" role="group" aria-labelledby="lens-abstractions-title"></div><p id="loaded-plugin-views-empty" class="lens-abstractions-empty" hidden>None enabled. Use Abstractions › Manage abstractions…</p></div>
       <div class="lens-tabs"><button id="index-tab" class="selected">Index</button><button id="pending-tab">Issues <span id="issue-count">0</span></button></div>
-      <input id="id-search" class="search" aria-label="Search IDs" placeholder="Find an ID or requirement…" />
+      <div class="lens-search-row"><input id="id-search" class="search" aria-label="Search IDs" title="Find an ID or requirement" placeholder="Find ID…" /><label id="lens-grouping-row">Group by <select id="lens-grouping" aria-label="Group definitions by"><option value="none">None</option><option value="status">Status</option><option value="module">Module</option><option value="feature">Feature</option><option value="file">File</option><option value="tag">Tag</option></select></label></div>
       <label id="module-filter-row" hidden>Module <select id="module-filter" aria-label="Filter by module"><option value="">All modules</option></select></label>
-      <label id="lens-grouping-row">Group by <select id="lens-grouping" aria-label="Group definitions by"><option value="none">None</option><option value="status">Status</option><option value="module">Module</option><option value="feature">Feature</option></select></label>
+      <label id="tag-filter-row" hidden>Tag <select id="tag-filter" aria-label="Filter by tag"><option value="">All tags</option></select></label>
       <div id="lens-heading" class="explorer-label">DEFINITIONS</div><div id="lens-results" class="lens-results"></div>
       <div id="references-panel" class="references-panel" hidden><div class="section-heading"><span id="references-title">REFERENCES</span><button id="close-references" class="icon-button" aria-label="Close references">×</button></div><div id="references-results"></div></div>
       <div id="warnings" class="warnings" hidden></div>
+      <div id="lens-resize" class="side-resize" role="separator" tabindex="0" aria-label="Project Lens width" aria-orientation="vertical" title="Drag to resize the Project Lens. Left/Right: adjust; Shift: fine adjustment; Home/End: limits; Enter or double-click: default width."></div>
     </aside>
   </main>
   </div>
@@ -111,13 +112,15 @@ app.innerHTML = `
   <dialog id="confirm-dialog"><h2 id="confirm-title"></h2><p id="confirm-message"></p><div class="dialog-actions"><button id="confirm-cancel" class="button secondary">Keep editing</button><button id="confirm-accept" class="button primary">Discard changes</button></div></dialog>
   <dialog id="new-file-dialog" aria-labelledby="new-file-title" aria-describedby="new-file-location"><form id="new-file-form">
     <h2 id="new-file-title">New Markdown file</h2><p id="new-file-location"></p>
-    <label for="new-file-name">Filename</label><input id="new-file-name" class="search" placeholder="notes.md" autocomplete="off" aria-describedby="new-file-hint new-file-error" />
-    <p id="new-file-hint">Created in the project root. Add .md, or leave off the extension.</p>
+    <label for="new-file-name">Filename</label><input id="new-file-name" class="search" placeholder="notes.md" autocomplete="off" aria-describedby="new-file-hint new-file-destination new-file-error" />
+    <p id="new-file-hint">Add .md, or leave off the extension.</p>
+    <label for="new-file-folder">Folder</label><select id="new-file-folder" class="search"></select>
+    <p id="new-file-destination" aria-live="polite"></p>
     <p id="new-file-error" class="coral" role="alert" hidden></p>
     <div class="dialog-actions"><button id="new-file-cancel" type="button" class="button secondary">Cancel</button><button id="new-file-create" type="submit" class="button primary">Create</button></div>
   </form></dialog>
   <dialog id="close-tab-dialog" aria-labelledby="close-tab-title" aria-describedby="close-tab-message"><h2 id="close-tab-title">Could not save changes</h2><p id="close-tab-message"></p><p id="close-tab-error" class="coral" role="alert"></p><div class="dialog-actions"><button id="close-tab-cancel" class="button secondary">Keep editing</button><button id="close-tab-discard" class="button secondary">Discard pending edits</button><button id="close-tab-retry" class="button primary">Retry saving</button></div></dialog>
-  <dialog id="plugin-manager-dialog" aria-labelledby="plugin-manager-title"><h2 id="plugin-manager-title">Installed plugins</h2><p>Installed packages are stored by Specular and remain available after restart.</p><div id="plugin-manager-list" class="plugin-manager-list"></div><p id="plugin-manager-empty">No plugins are installed.</p><div class="dialog-actions plugin-manager-actions"><button id="plugin-install-archive" class="button secondary">Install .zip...</button><button id="plugin-install-folder" class="button secondary">Install folder...</button><button id="plugin-manager-close" class="button primary">Close</button></div></dialog>
+  <dialog id="plugin-manager-dialog" aria-labelledby="plugin-manager-title"><h2 id="plugin-manager-title">Installed abstractions</h2><p>Installed packages are stored by Specular and remain available after restart.</p><div id="plugin-manager-list" class="plugin-manager-list"></div><p id="plugin-manager-empty">No abstractions are installed.</p><div class="dialog-actions plugin-manager-actions"><button id="plugin-install-archive" class="button secondary">Install .zip...</button><button id="plugin-install-folder" class="button secondary">Install folder...</button><button id="plugin-manager-close" class="button primary">Close</button></div></dialog>
 `;
 
 interface BufferState extends OpenDocument { state: EditorState; savedText: string; conflict?: string; autosave?: Autosave }
@@ -287,7 +290,13 @@ const fontSizes = new FontSizeControls(api, () => {
   }
   editor.requestMeasure();
 }, notify);
-const panelSplit = new PanelSplit($('.document-split'), $('#panel-divider'), $<HTMLButtonElement>('#reset-split'), () => editor.requestMeasure());
+const panelLayout = new PanelLayoutStore(api, notify);
+const panelSplit = new PanelSplit($('.document-split'), $('#panel-divider'), $<HTMLButtonElement>('#reset-split'), () => editor.requestMeasure(),
+  ratio => panelLayout.set('sourceRatio', ratio));
+const explorerResize = new SidePanelResize($('#workspace'), $('.explorer'), $('#explorer-resize'), 'explorer', $('.inspector'), () => editor.requestMeasure(),
+  width => panelLayout.set('explorerWidth', width));
+const lensResize = new SidePanelResize($('#workspace'), $('.inspector'), $('#lens-resize'), 'lens', $('.explorer'), () => editor.requestMeasure(),
+  width => panelLayout.set('lensWidth', width));
 function rememberSourceScroll() {
   if (current && buffers.has(current) && !$('#source-panel').hidden) sourceScroll.set(current, editor.scrollSnapshot());
 }
@@ -305,9 +314,12 @@ function syncSourceVisibility() {
   $<HTMLButtonElement>('#reset-split').disabled = !current || hidden;
   panelSplit.refresh();
 }
+let savedSourceHidden = false; // the saved preference, applied at startup and on project switches
 function setSourceHidden(hidden: boolean) {
   rememberSourceScroll();
   sourceHidden = hidden;
+  savedSourceHidden = hidden;
+  panelLayout.set('sourceHidden', hidden ? true : undefined);
   syncSourceVisibility();
   const scroll = current ? sourceScroll.get(current) : undefined;
   if (!hidden && scroll) editor.dispatch({ effects: scroll });
@@ -412,8 +424,7 @@ function updateStats() {
   $('#token-status').title = 'Rough character-count estimate (characters ÷ 4), not a model tokenizer or usage bill.';
 }
 function hasView(id: string) { try { return !!viewRegistry.definition(id); } catch { return false; } }
-function activateOverview() { if (hasView(OVERVIEW_VIEW)) viewHost.openView(OVERVIEW_VIEW); else notify('Enable the Relationships plugin to open Overview.'); }
-function activateMap(id?: string) { if (hasView(FOCUS_VIEW)) viewHost.openView(FOCUS_VIEW, id === undefined ? undefined : { elementId: id }); else notify('Enable the Relationships plugin to open Focus.'); }
+function activateMap(id?: string) { if (hasView(FOCUS_VIEW)) viewHost.openView(FOCUS_VIEW, id === undefined ? undefined : { elementId: id }); else notify('Enable the Project map abstraction to open Focus.'); }
 function closeView(group = viewHost.activeGroup) {
   if (group) viewHost.close(group);
   if (current && !viewHost.activeGroup) editor.focus();
@@ -422,6 +433,10 @@ function syncWorkspaceView() {
   $('.document-area').classList.toggle('abstraction-active', !!viewHost.activeGroup);
   markdownSearch?.update();
 }
+function tabIcon(tab: HTMLElement, svg: string, kind: string) {
+  const icon = document.createElement('span'); icon.className = `tab-icon ${kind}`; icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = svg; tab.prepend(icon);
+}
 function renderTabs() {
   const parent = $('#tabs'); parent.replaceChildren();
   for (const [file, buffer] of buffers) {
@@ -429,6 +444,7 @@ function renderTabs() {
     group.setAttribute('role', 'presentation');
     const tab = button(`${file.split('/').pop()}${isDirty(buffer) ? ' ●' : ''}`, `tab${file === current && !viewHost.activeGroup ? ' active' : ''}`, () => run(() => openDocument(file)));
     tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(file === current && !viewHost.activeGroup)); tab.title = file;
+    tabIcon(tab, isMarkdown(file) ? documentIcon(13) : codeIcon(13), 'file');
     const close = button('×', 'tab-close', () => run(() => closeTab(file)));
     close.setAttribute('aria-label', `Close ${file}`); close.title = `Close ${file} (Ctrl+W for active tab)`;
     group.append(tab);
@@ -444,6 +460,7 @@ function renderTabs() {
     const group = document.createElement('div'); group.className = `tab-group${active ? ' active' : ''}`;
     const tab = button(definition.title, `tab${active ? ' active' : ''}`, () => viewHost.openGroup(definition.id));
     tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(active)); tab.setAttribute('aria-controls', definition.containerId);
+    tab.title = `${definition.title} (view)`; tabIcon(tab, viewIcon(), 'view');
     const close = button('\u00d7', 'tab-close', () => closeView(definition.id)); close.setAttribute('aria-label', `Close ${definition.title}`);
     group.append(tab, close); parent.append(group);
   }
@@ -527,23 +544,25 @@ async function closeTab(file: string) {
 }
 const fileExplorer = new FileExplorer($('#files'), file => run(() => openDocument(file)));
 function renderFiles() {
-  fileExplorer.render(workspace, index.findings, current, $<HTMLInputElement>('#file-search').value.toLowerCase());
+  fileExplorer.render(workspace, index.findings, current, $<HTMLInputElement>('#file-search').value.toLowerCase(), path => exclusionFor(path, workspace?.idConfiguration?.configuration));
   $('#file-count').textContent = String(workspace?.files.length ?? 0);
 }
 async function useWorkspace(next: WorkspaceSnapshot) {
   for (const buffer of buffers.values()) buffer.autosave?.dispose();
   projectRevision++; openRevision++;
   clearTimeout(previewTimer);
-  buffers.clear(); sourceScroll.clear(); sourceHidden = false; current = undefined; workspace = next;
+  buffers.clear(); sourceScroll.clear(); sourceHidden = savedSourceHidden; current = undefined; workspace = next;
   viewHost.reset();
   sessionSignature = '';
   fileExplorer.reset();
   index = { definitions: [], references: [], findings: [], diagrams: [] };
   referencesFor = undefined; expandedRelationships.clear(); $('#references-panel').hidden = true;
   $('#welcome').hidden = true; $('#workspace').hidden = false;
-  $<HTMLSelectElement>('#module-filter').value = '';
+  $<HTMLSelectElement>('#module-filter').value = ''; $<HTMLSelectElement>('#tag-filter').value = '';
   $<HTMLSelectElement>('#lens-grouping').value = 'none'; lensGroups.reset();
   $('#project-heading').textContent = next.name; $('#project-heading').title = next.root;
+  $('#project-chip').classList.remove('no-project'); $<HTMLButtonElement>('#project-chip').disabled = false;
+  $('#project-chip').title = `Open project: ${next.root}\nClick to switch to a recent project.`;
   $<HTMLButtonElement>('#project-config-open').disabled = false;
   $('#file-search').setAttribute('value', ''); $<HTMLInputElement>('#file-search').value = '';
   showEmptyDocument();
@@ -564,6 +583,27 @@ async function useWorkspace(next: WorkspaceSnapshot) {
   }
   renderWarnings();
   setStatus(`${next.name} · ${next.files.length} text files`);
+}
+// Back to the welcome page with no project: the inverse of useWorkspace.
+function useNoWorkspace() {
+  for (const buffer of buffers.values()) buffer.autosave?.dispose();
+  projectRevision++; openRevision++;
+  clearTimeout(previewTimer);
+  buffers.clear(); sourceScroll.clear(); current = undefined; workspace = undefined;
+  viewHost.reset();
+  sessionSignature = '';
+  fileExplorer.reset();
+  invalidateIndex();
+  index = { definitions: [], references: [], findings: [], diagrams: [] };
+  referencesFor = undefined; expandedRelationships.clear(); $('#references-panel').hidden = true;
+  $('#workspace').hidden = true; $('#welcome').hidden = false;
+  $('#project-heading').textContent = 'A workspace for software intent'; $('#project-heading').title = '';
+  $('#project-chip').classList.add('no-project'); $<HTMLButtonElement>('#project-chip').disabled = true; $('#project-chip').title = '';
+  $<HTMLButtonElement>('#project-config-open').disabled = true;
+  $<HTMLInputElement>('#file-search').value = '';
+  showEmptyDocument();
+  renderWarnings();
+  setStatus('No project open');
 }
 async function openDocument(file: string, source?: SourceLocation, anchor?: string, indexedRevision?: number,
   expected?: { text: string; valid: () => boolean }) {
@@ -630,12 +670,22 @@ function newMarkdownFile() {
   const dialog = $<HTMLDialogElement>('#new-file-dialog');
   const input = $<HTMLInputElement>('#new-file-name');
   const error = $('#new-file-error');
-  const controls = [...dialog.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input, button')];
+  const folder = $<HTMLSelectElement>('#new-file-folder');
+  const controls = [...dialog.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>('input, select, button')];
   const project = projectRevision;
   let creating = false;
   input.value = ''; error.hidden = true;
   controls.forEach(control => { control.disabled = false; });
   $('#new-file-location').textContent = `Project: ${workspace.root}`;
+  // Increment 36: offer the explorer's folders, starting at the active document's folder.
+  const folders = ['', ...workspace.folders], active = current?.includes('/') ? current.slice(0, current.lastIndexOf('/')) : '';
+  folder.replaceChildren(...folders.map(path => new Option(path || 'Project root', path)));
+  folder.value = folders.includes(active) ? active : '';
+  const destination = () => {
+    const name = input.value.trim(), file = !name ? '…' : /\.[^./\\]+$/.test(name) ? name : `${name}.md`;
+    $('#new-file-destination').textContent = `Creates ${[folder.value, file].filter(Boolean).join('/')}`;
+  };
+  input.oninput = destination; folder.onchange = destination; destination();
   $('#new-file-cancel').onclick = () => dialog.close();
   dialog.oncancel = event => { if (creating) event.preventDefault(); };
   $('#new-file-form').onsubmit = async event => {
@@ -644,7 +694,7 @@ function newMarkdownFile() {
     creating = true; error.hidden = true;
     controls.forEach(control => { control.disabled = true; });
     let result: CreateDocumentResult;
-    try { result = await api.createMarkdown(input.value); }
+    try { result = await api.createMarkdown(input.value, folder.value); }
     catch (failure) {
       result = { ok: false, message: failure instanceof Error ? failure.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(failure) };
     }
@@ -738,6 +788,8 @@ async function refresh() {
   if (!workspace || projectOpening || closingTab || departing) return;
   if (refreshing) { refreshAgain = true; return; }
   refreshing = true;
+  // Increment 95: Refresh also rescans agent session logs for activity views.
+  void api.activityModel(true).catch(() => undefined);
   $<HTMLButtonElement>('#project-config-open').disabled = true;
   markdownSearch?.update();
   const project = projectRevision;
@@ -834,6 +886,14 @@ function renderLens() {
   moduleFilter.replaceChildren(...[['', 'All modules'], ['@unassigned', 'Unassigned'], ['@conflict', 'Module conflicts'], ...(configuration?.modules ?? []).map(module => [module.key, module.name])].map(([value, label]) => new Option(label, value)));
   moduleFilter.value = [...moduleFilter.options].some(option => option.value === selectedModule) ? selectedModule : '';
   $('#module-filter-row').hidden = lensMode !== 'index' || !configuration || (configuration.modules === undefined && configuration.moduleRules === undefined && configuration.moduleOverrides === undefined);
+  // Increment 96f: section tags configured on any category, plus untagged definitions.
+  const tagFilter = $<HTMLSelectElement>('#tag-filter'), selectedTag = tagFilter.value;
+  // 96g: pattern entries build their tags from headings, so the indexed tags are listed too.
+  const tagged = (configuration?.categories ?? []).some(category => category.sectionTags?.length);
+  const tags = tagged ? [...new Set([...(configuration?.categories ?? []).flatMap(category => (category.sectionTags ?? []).flatMap(entry => entry.pattern === undefined ? [entry.tag] : [])), ...index.definitions.flatMap(item => item.tags ?? [])])].sort() : [];
+  tagFilter.replaceChildren(...[['', 'All tags'], ['@untagged', 'Untagged'], ...tags.map(tag => [tag, tag])].map(([value, label]) => new Option(label, value)));
+  tagFilter.value = [...tagFilter.options].some(option => option.value === selectedTag) ? selectedTag : '';
+  $('#tag-filter-row').hidden = lensMode !== 'index' || !tags.length;
   $('#lens-grouping-row').hidden = lensMode !== 'index';
   const grouping = lensMode === 'index' ? $<HTMLSelectElement>('#lens-grouping').value as LensGrouping : 'none';
   const indexedRevision = revision;
@@ -843,17 +903,23 @@ function renderLens() {
   $('#lens-heading').textContent = lensMode === 'index' ? 'DEFINITIONS' : 'PENDING ITEMS & ID ISSUES';
   $('#index-tab').classList.toggle('selected', lensMode === 'index'); $('#pending-tab').classList.toggle('selected', lensMode === 'issues');
   const moduleItems = items.filter(item => {
+    if (lensMode === 'index' && tagFilter.value) {
+      const itemTags = 'tags' in item ? item.tags ?? [] : [];
+      if (tagFilter.value === '@untagged' ? itemTags.length : !itemTags.includes(tagFilter.value)) return false;
+    }
     if (lensMode !== 'index' || !moduleFilter.value) return true;
     const assignment = 'moduleAssignment' in item ? item.moduleAssignment : undefined;
     return moduleFilter.value === '@unassigned' ? !assignment || assignment.state === 'unassigned' : moduleFilter.value === '@conflict' ? assignment?.state === 'conflict' : assignment?.state === 'assigned' && assignment.modules.some(module => module.key === moduleFilter.value);
   });
-  const filtered = moduleItems.filter(item => `${item.file} ${'id' in item && item.kind === 'definition' ? idLabel(item) + ' ' + item.label : ('message' in item ? item.message : item.label)}`.toLowerCase().includes(query));
+  const filtered = moduleItems.filter(item => `${item.file} ${'id' in item && item.kind === 'definition' ? idLabel(item) + ' ' + item.label : ('message' in item ? `${item.message} ${item.owner?.id ?? ''}${item.clarification ? ' needs clarification' : ''}` : item.label)}`.toLowerCase().includes(query));
   const renderCard = (item: Occurrence | Finding): HTMLElement => {
     const row = button('', 'lens-row', () => run(() => openDocument(item.file, item, undefined, indexedRevision)));
-    const title = document.createElement('strong'); title.textContent = 'id' in item && item.kind === 'definition' ? idLabel(item) : item.kind === 'pending' ? 'Pending' : item.kind === 'duplicate' ? 'Duplicate ID' : item.kind === 'module-conflict' ? 'Module conflict' : item.kind === 'feature-conflict' ? 'Feature conflict' : 'Unresolved ID';
+    const title = document.createElement('strong'); title.textContent = 'id' in item && item.kind === 'definition' ? idLabel(item) : item.kind === 'pending' ? ('clarification' in item && item.clarification ? 'Needs clarification' : 'Pending') : item.kind === 'duplicate' ? 'Duplicate ID' : item.kind === 'module-conflict' ? 'Module conflict' : item.kind === 'feature-conflict' ? 'Feature conflict' : 'Unresolved ID';
     if (item.kind !== 'definition') title.className = item.kind === 'pending' ? 'amber' : 'coral';
     const label = document.createElement('span'); label.textContent = 'id' in item && item.kind === 'definition' ? item.label.replace(item.id, '').replace(/^\s*[—–:-]\s*/, '').slice(0, 150) : ('message' in item ? item.message : item.label).slice(0, 150);
-    const source = document.createElement('small'); source.textContent = `${item.file}:${item.line}`;
+    // 99b: pending work names the ID whose section contains it.
+    const owner = 'message' in item && item.kind === 'pending' ? item.owner : undefined;
+    const source = document.createElement('small'); source.textContent = `${item.file}:${item.line}${owner ? ` · in ${owner.id}` : ''}`;
     row.append(title, label, source);
     if ('id' in item && item.kind === 'definition') {
       const card = document.createElement('div'); card.className = 'lens-card'; card.dataset.id = idKey(item);
@@ -883,6 +949,7 @@ function renderLens() {
       editFeatures.setAttribute('aria-label', `Edit features for ${idLabel(item)}`); actions.append(editFeatures);
       if (item.authoredStatus) { row.append(statusBadge(item.authoredStatus.evidence[0].display ?? item.authoredStatus.evidence[0].value, configuration?.statuses ?? [], item.authoredStatus.state === 'conflict')); }
       if (item.featureAssignment) row.append(featureBadges(item.featureAssignment));
+      if (item.tags?.length) row.append(tagBadges(item.tags));
       if (item.moduleAssignment) row.append(moduleBadges(item.moduleAssignment));
       card.append(row, actions);
       if (item.authoredStatus) card.append(statusEvidence(item, configuration?.statuses ?? [], source => run(() => openDocument(source.file, source, undefined, indexedRevision))));
@@ -896,11 +963,11 @@ function renderLens() {
     const definitions = filtered as Occurrence[];
     const total = document.createElement('p'); total.className = 'empty-hint lens-group-total';
     const count = new Set(definitions.map(idKey)).size;
-    total.textContent = `${count} distinct ${count === 1 ? 'ID' : 'IDs'} matching filters.${grouping === 'status' ? ' Statuses are authored, not verified progress.' : ` IDs in multiple ${grouping}s appear in each group.`}`;
+    total.textContent = `${count} distinct ${count === 1 ? 'ID' : 'IDs'} matching filters.${grouping === 'status' ? ' Statuses are authored, not verified progress.' : grouping === 'file' ? ' An ID defined in several files appears in each of them.' : ` IDs in multiple ${grouping}s appear in each group.`}`;
     parent.append(total);
     lensGroups.render(parent, grouping, groupDefinitions(definitions, grouping), renderCard);
   }
-  if (!filtered.length) { const empty = document.createElement('p'); empty.className = 'empty-hint'; empty.textContent = !indexReady ? indexNotice : query || (lensMode === 'index' && moduleFilter.value) ? 'No matching items.' : lensMode === 'index' ? 'Define an ID in a heading or an ID table column.' : 'No pending items or ID issues found.'; parent.append(empty); }
+  if (!filtered.length) { const empty = document.createElement('p'); empty.className = 'empty-hint'; empty.textContent = !indexReady ? indexNotice : query || (lensMode === 'index' && (moduleFilter.value || tagFilter.value)) ? 'No matching items.' : lensMode === 'index' ? 'Define an ID in a heading or an ID table column.' : 'No pending items or ID issues found.'; parent.append(empty); }
   if (grouping === 'none' && filtered.length > 250) { const more = document.createElement('p'); more.className = 'empty-hint'; more.textContent = `Showing 250 of ${filtered.length}. Use search to narrow the list.`; parent.append(more); }
   focusModuleCard();
   restoreFocus?.();
@@ -943,7 +1010,7 @@ function renderRelationships(id: string) {
   $('#references-panel').classList.add('showing-relationships');
   $('#references-title').textContent = `${keyLabel(id)} relationships`;
   const note = document.createElement('p'); note.className = 'relationship-note';
-  note.textContent = 'Requirement/design and design/task references within defining sections and ID rows. References do not establish implementation or coverage.';
+  note.textContent = 'References between requirements, design decisions, and tasks within defining sections and ID rows. References do not establish implementation or coverage.';
   parent.append(note, button('All occurrences', 'quiet-button', () => showReferences(id)));
   if (hasView(FOCUS_VIEW)) parent.append(button('Explore map', 'quiet-button', () => activateMap(id)));
   if (!indexReady) { const status = document.createElement('p'); status.className = 'relationship-note'; status.textContent = indexNotice; parent.append(status); return; }
@@ -956,7 +1023,7 @@ function renderRelationships(id: string) {
   }
   if (!result.groups.length) {
     const empty = document.createElement('p'); empty.className = 'relationship-note';
-    empty.textContent = 'No owned requirement/design or design/task references found. Other mentions are available under All occurrences.'; parent.append(empty);
+    empty.textContent = 'No owned references between requirements, design decisions, and tasks found. Other mentions are available under All occurrences.'; parent.append(empty);
   }
   for (const group of result.groups) {
     const details = document.createElement('details'); details.className = 'relationship-group'; details.dataset.id = group.id;
@@ -1057,7 +1124,9 @@ function showInSource() {
 
 const recents = new RecentProjectsView($('#welcome-recent'), api, root => run(() => switchProject(() => api.openRecent(root))));
 const agentSetup = new AgentSetup(api);
-async function switchProject(task: () => Promise<WorkspaceOpenResult>) {
+// Increment 94: summaries requested by custom views, built from the current models.
+new SummaryService(api, { models: () => modelsFor(viewWorkspace.getSnapshot()), agentPath: kind => $<HTMLInputElement>(`#${kind}-path`).value });
+async function switchProject(task: () => Promise<WorkspaceOpenResult>, closing = false) {
   if (projectOpening || closingTab || departing) return;
   const savedSession = persistWorkspaceSession();
   let settled!: () => void;
@@ -1074,6 +1143,7 @@ async function switchProject(task: () => Promise<WorkspaceOpenResult>) {
     const result = await task();
     if (!result.ok) notify(result.message);
     else if (result.workspace) { recents.close(); await useWorkspace(result.workspace); }
+    else if (closing) useNoWorkspace();
     await recents.refresh();
     if (!result.ok && recentDialog.open) recents.showError(result.message);
   } finally {
@@ -1087,7 +1157,7 @@ async function switchProject(task: () => Promise<WorkspaceOpenResult>) {
 }
 const openProject = () => run(() => switchProject(() => api.chooseWorkspace()));
 $('#open-project').onclick = openProject; $('#welcome-open').onclick = openProject;
-$('#show-recent').onclick = () => recents.show();
+$('#show-recent').onclick = $('#project-chip').onclick = () => recents.show();
 $('#show-agent-setup').onclick = () => agentSetup.show();
 const conversationPanel = new ConversationPanel(api, () => agentSetup.show());
 const terminalPanel = new TerminalPanel(api, kind => $<HTMLInputElement>(`#${kind}-path`).value,
@@ -1115,20 +1185,28 @@ $('#show-in-source').onclick = showInSource;
 $('#file-search').oninput = renderFiles; $('#id-search').oninput = renderLens;
 $('#index-tab').onclick = () => { lensMode = 'index'; renderLens(); };
 $('#pending-tab').onclick = () => { lensMode = 'issues'; renderLens(); };
-$('#dependency-overview-open').onclick = activateOverview;
 function pluginGroup(id: string) { return `plugin:${id}`; }
+const pluginTitle = (manifest: InstalledPluginInfo['manifest']) => manifest.title ?? manifest.views[0]?.title ?? manifest.discovery?.tool ?? manifest.id;
 function pluginSignature(plugin: InstalledPluginInfo) { return JSON.stringify([plugin.manifest, plugin.origin, plugin.revision]); }
-function renderPluginManager(plugins: InstalledPluginInfo[]) {
+/** 97c: the same dialog manages abstractions (packages with views) or profiles (packages with a discovery contribution). */
+let managerKind: 'abstraction' | 'profile' = 'abstraction';
+const isProfile = (plugin: InstalledPluginInfo) => !!plugin.manifest.discovery && !plugin.manifest.views.length;
+function renderPluginManager(all: InstalledPluginInfo[]) {
+  const plugins = all.filter(plugin => managerKind === 'profile' ? !!plugin.manifest.discovery : !isProfile(plugin));
+  $('#plugin-manager-title').textContent = managerKind === 'profile' ? 'Installed profiles' : 'Installed abstractions';
+  $('#plugin-manager-empty').textContent = managerKind === 'profile' ? 'No profiles are installed. Bundled and project profiles are listed under Project configuration > Discover > Providers by tool.' : 'No abstractions are installed.';
   const list = $('#plugin-manager-list'); list.replaceChildren(); $('#plugin-manager-empty').hidden = plugins.length > 0;
   for (const plugin of plugins) {
     const row = document.createElement('article'); row.className = 'plugin-manager-item';
     const heading = document.createElement('div'); heading.className = 'plugin-manager-heading';
-    const name = document.createElement('strong'); name.textContent = plugin.manifest.id;
+    const name = document.createElement('div'); name.className = 'plugin-manager-name';
+    const title = document.createElement('strong'); title.textContent = pluginTitle(plugin.manifest);
+    const id = document.createElement('small'); id.textContent = plugin.manifest.id; name.append(title, id);
     const version = document.createElement('span'); version.textContent = `v${plugin.manifest.version}${plugin.bundledVersion ? ` · ${plugin.origin === 'bundled' ? 'Bundled' : 'Installed replacement'} · bundled v${plugin.bundledVersion}` : ''}`; heading.append(name, version);
-    const details = document.createElement('p'); details.textContent = plugin.status === 'invalid' ? plugin.message ?? 'Invalid package' : `${plugin.manifest.views.length} view(s) · ${plugin.manifest.capabilities.join(', ')}`;
+    const details = document.createElement('p'); details.textContent = plugin.status === 'invalid' ? plugin.message ?? 'Invalid package' : `${isProfile(plugin) ? `Profile for ${plugin.manifest.discovery!.tool}` : `${plugin.manifest.views.length} view(s)${plugin.manifest.discovery ? ` · profile for ${plugin.manifest.discovery.tool}` : ''}`} · ${plugin.manifest.capabilities.join(', ')}`;
     const actions = document.createElement('div'); actions.className = 'plugin-manager-item-actions';
     if (plugin.status === 'ready') {
-      if (plugin.enabled) actions.append(button('Open', 'quiet-button', () => { const entry = registeredPlugins.get(plugin.manifest.id); if (entry) { $<HTMLDialogElement>('#plugin-manager-dialog').close(); viewHost.openView(entry.view); } }));
+      if (plugin.enabled && plugin.manifest.views.length) actions.append(button('Open', 'quiet-button', () => { const entry = registeredPlugins.get(plugin.manifest.id); if (entry) { $<HTMLDialogElement>('#plugin-manager-dialog').close(); viewHost.openView(entry.view); } }));
       actions.append(button(plugin.enabled ? 'Disable' : 'Enable', 'quiet-button', () => run(async () => { await api.setPluginEnabled(plugin.manifest.id, !plugin.enabled); await syncPlugins(); })));
     }
     if (plugin.bundledVersion) actions.append(button('Restore bundled version', 'quiet-button', () => run(async () => { await api.restoreBundledPlugin(plugin.manifest.id); await syncPlugins(); })));
@@ -1143,28 +1221,30 @@ async function syncPlugins(openId?: string) {
     const plugin = enabled.get(id);
     if (!plugin || pluginSignature(plugin) !== registered.signature) { viewHost.remove(pluginGroup(id)); viewRegistry.unregisterGroup(pluginGroup(id)); registeredPlugins.delete(id); }
   }
-  for (const plugin of plugins) if (plugin.enabled && plugin.status === 'ready') {
+  // 97c: a discovery plugin without views runs from the Discover tab only.
+  for (const plugin of plugins) if (plugin.enabled && plugin.status === 'ready' && plugin.manifest.views.length) {
     if (!registeredPlugins.has(plugin.manifest.id)) registeredPlugins.set(plugin.manifest.id, { view: registerPluginViews(viewRegistry, plugin.manifest), signature: pluginSignature(plugin) });
   }
   $('#loaded-plugin-views').replaceChildren();
-  for (const plugin of plugins) if (plugin.enabled && plugin.status === 'ready') {
-    const id = registeredPlugins.get(plugin.manifest.id)!.view, open = button(plugin.manifest.title ?? plugin.manifest.views[0].title, 'quiet-button', () => viewHost.openView(id));
-    open.dataset.pluginId = plugin.manifest.id; $('#loaded-plugin-views').append(open);
+  for (const plugin of plugins) if (plugin.enabled && plugin.status === 'ready' && plugin.manifest.views.length) {
+    const id = registeredPlugins.get(plugin.manifest.id)!.view, open = button(pluginTitle(plugin.manifest), 'abstraction-shortcut', () => viewHost.openView(id));
+    open.dataset.pluginId = plugin.manifest.id; tabIcon(open, viewIcon(12), 'view'); $('#loaded-plugin-views').append(open);
   }
+  $('#loaded-plugin-views-empty').hidden = $('#loaded-plugin-views').childElementCount > 0;
   renderPluginManager(plugins);
-  $<HTMLButtonElement>('#dependency-overview-open').disabled = !enabled.get('specular.relationships')?.manifest.views.some(v => v.id === 'overview');
   renderLens();
   renderReferencePanel();
   if (openId && registeredPlugins.has(openId)) viewHost.openView(registeredPlugins.get(openId)!.view);
 }
-$('#plugin-view-open').onclick = () => run(async () => {
-  const manifest = await api.choosePlugin();
-  if (manifest) { await syncPlugins(manifest.id); notify(`Installed ${manifest.id} ${manifest.version}.`); }
+/** Shared by the plugin manager dialog and the Abstractions menu; `open` shows the new plugin's view. */
+const installPlugin = (choose: () => Promise<{ id: string; version: string } | null>, open: boolean) => run(async () => {
+  const manifest = await choose();
+  if (manifest) { await syncPlugins(open ? manifest.id : undefined); notify(`Installed ${manifest.id} ${manifest.version}.`); }
 });
-$('#plugin-manager-open').onclick = () => run(async () => { viewHost.showDocument(); await syncPlugins(); $<HTMLDialogElement>('#plugin-manager-dialog').showModal(); });
+const showPluginManager = (kind: typeof managerKind = 'abstraction') => run(async () => { managerKind = kind; viewHost.showDocument(); await syncPlugins(); $<HTMLDialogElement>('#plugin-manager-dialog').showModal(); });
 $('#plugin-manager-close').onclick = () => $<HTMLDialogElement>('#plugin-manager-dialog').close();
-$('#plugin-install-folder').onclick = () => run(async () => { const manifest = await api.choosePlugin(); if (manifest) { await syncPlugins(); notify(`Installed ${manifest.id} ${manifest.version}.`); } });
-$('#plugin-install-archive').onclick = () => run(async () => { const manifest = await api.installPluginArchive(); if (manifest) { await syncPlugins(); notify(`Installed ${manifest.id} ${manifest.version}.`); } });
+$('#plugin-install-folder').onclick = () => installPlugin(() => api.choosePlugin(managerKind), false);
+$('#plugin-install-archive').onclick = () => installPlugin(() => api.installPluginArchive(managerKind), false);
 $('#close-references').onclick = () => { referencesFor = undefined; $('#references-panel').hidden = true; };
 for (const mode of ['preview', 'diagrams'] as const) $(`#${mode}-tab`).onclick = () => {
   viewMode = mode;
@@ -1231,6 +1311,7 @@ featureAssignmentEditor = new FeatureAssignmentEditor({
   },
 });
 $('#module-filter').onchange = renderLens;
+$('#tag-filter').onchange = renderLens;
 $('#lens-grouping').onchange = renderLens;
 $('#project-config-open').onclick = () => projectConfiguration!.show();
 api.onWorkspaceChanged(() => run(refresh));
@@ -1264,9 +1345,17 @@ api.onAction(action => {
   if (action === 'agent-setup') agentSetup.show();
   if (action === 'codex-conversation') void conversationPanel.show();
   if (action === 'terminals') terminalPanel.toggle();
+  if (action === 'plugin-manager') showPluginManager();
+  if (action === 'plugin-install-folder') installPlugin(() => api.choosePlugin(), true);
+  if (action === 'plugin-install-archive') installPlugin(() => api.installPluginArchive(), true);
+  if (action === 'project-configuration' && workspace) projectConfiguration!.show();
+  if (action === 'profile-manager') showPluginManager('profile');
+  if (action === 'profile-install-folder') installPlugin(() => api.choosePlugin('profile'), false);
+  if (action === 'profile-install-archive') installPlugin(() => api.installPluginArchive('profile'), false);
   if (action.startsWith('recent:')) run(() => switchProject(() => api.openRecent(action.slice(7))));
   if (action === 'close-tab') { if (viewHost.activeGroup) { closeView(); return; } if (current) run(() => closeTab(current!)); return; }
   if (action === 'open') openProject();
+  if (action === 'close-project' && workspace) run(() => switchProject(() => api.closeWorkspace(), true));
   if (action === 'new-file') newMarkdownFile();
   if (viewHost.activeGroup && ['save', 'definition', 'references'].includes(action)) return;
   if (action === 'save') run(save);
@@ -1298,4 +1387,8 @@ run(async () => {
   editor.dispatch({ effects: themeCompartment.reconfigure(EditorView.theme({}, { dark: currentAppearance().mode === 'dark' })) });
   themeSwitch.disabled = false;
   await api.appearanceReady();
-  await fontSizes.load(); await syncPlugins(); await switchProject(() => api.initialWorkspace()); });
+  await fontSizes.load();
+  const savedLayout = await panelLayout.load();
+  explorerResize.restore(savedLayout.explorerWidth); lensResize.restore(savedLayout.lensWidth); panelSplit.restore(savedLayout.sourceRatio);
+  savedSourceHidden = sourceHidden = savedLayout.sourceHidden === true; syncSourceVisibility();
+  await syncPlugins(); await switchProject(() => api.initialWorkspace()); });

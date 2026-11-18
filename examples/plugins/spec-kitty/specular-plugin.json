@@ -1,0 +1,13 @@
+{
+  "manifestVersion": 1,
+  "id": "example.spec-kitty",
+  "title": "Spec Kitty discovery",
+  "version": "1.0.0",
+  "api": ">=0.2.0 <0.3.0",
+  "entry": "index.js",
+  "capabilities": ["workspace.read"],
+  "models": ["markdown@1"],
+  "views": [],
+  "discovery": { "tool": "Spec Kitty", "versions": "kitty-specs work packages with YAML front matter (spec-kitty 0.x)", "description": "Work packages and subtasks of kitty-specs/.",
+    "applies": { "files": "**/kitty-specs/*/tasks/*.md", "min": 2 } }
+}

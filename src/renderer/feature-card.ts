@@ -10,6 +10,13 @@ export function featureBadges(assignment: NonNullable<Occurrence['featureAssignm
   return row;
 }
 
+/** Increment 96f: section tags, styled like feature badges. */
+export function tagBadges(tags: readonly string[]) {
+  const row = document.createElement('span'); row.className = 'feature-badges tag-badges'; row.setAttribute('aria-label', 'Section tags');
+  for (const tag of tags) { const badge = document.createElement('span'); badge.className = 'feature-badge tag-badge'; badge.textContent = tag; badge.title = 'Section tag: ' + tag; row.append(badge); }
+  return row;
+}
+
 export function featureEvidence(assignment: FeatureAssignment, navigate: (source: SourceLocation) => void, scope?: string) {
   const details = document.createElement('details'); details.className = 'feature-evidence'; const summary = document.createElement('summary'); summary.textContent = 'Features'; details.append(summary);
   for (const evidence of assignment.evidence) {

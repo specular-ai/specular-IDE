@@ -1,6 +1,6 @@
 {
   "name": "specular-bundled-relationships",
-  "version": "2.1.0",
+  "version": "2.3.0",
   "private": true,
   "type": "module",
   "scripts": { "build": "tsc --noEmit && node build.mjs", "validate": "specular-plugin-validate ." },

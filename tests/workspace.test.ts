@@ -45,6 +45,34 @@ test('exclusive creation preserves existing files, directories, links, and concu
   assert.equal(await readFile(path.join(root, 'race.md'), 'utf8'), '');
 }));
 
+test('creates Markdown in existing nested and empty folders and rejects unsafe destinations without writing', async () => fixture(async (root, workspace) => {
+  await mkdir(path.join(root, 'specs', 'auth'), { recursive: true }); await mkdir(path.join(root, 'empty')); await mkdir(path.join(root, 'node_modules', 'pkg'), { recursive: true });
+  await writeFile(path.join(root, 'specs', 'auth', 'spec.md'), 'Keep this content');
+  const nested = await workspace.createMarkdown('notes', 'specs/auth');
+  assert.equal(nested.path, 'specs/auth/notes.md');
+  assert.deepEqual(await workspace.read(nested.path), nested);
+  assert.equal((await workspace.createMarkdown('first.md', 'empty')).path, 'empty/first.md');
+  assert.equal((await workspace.createMarkdown('root', '')).path, 'root.md');
+  assert.equal((await workspace.snapshot()).documents['specs/auth/notes.md'], '');
+  await assert.rejects(() => workspace.createMarkdown('spec', 'specs/auth'), /“specs\/auth\/spec\.md” already exists/);
+  await assert.rejects(() => workspace.createMarkdown('x', 'missing'), /“missing” no longer exists/);
+  await assert.rejects(() => workspace.createMarkdown('x', 'specs/auth/spec.md'), /not a folder/);
+  await assert.rejects(() => workspace.createMarkdown('x', 'specs/../../outside'), /outside the open project/);
+  await assert.rejects(() => workspace.createMarkdown('x', path.join(root, 'specs')), /relative project path/);
+  await assert.rejects(() => workspace.createMarkdown('x', '\\\\server\\share'), /relative project path|outside the open project/);
+  await assert.rejects(() => workspace.createMarkdown('x', 'node_modules/pkg'), /excluded project folder/);
+  await assert.rejects(() => workspace.createMarkdown('specs/x.md', 'empty'), /without folders/);
+  const type = process.platform === 'win32' ? 'junction' : 'dir';
+  await symlink(path.join(root, 'specs'), path.join(root, 'alias'), type);
+  await symlink(path.dirname(root), path.join(root, 'external'), type);
+  await assert.rejects(() => workspace.createMarkdown('x', 'alias'), /links are excluded/);
+  await assert.rejects(() => workspace.createMarkdown('x', 'external'), /outside the open project/);
+  assert.deepEqual((await readdir(path.join(root, 'specs', 'auth'))).sort(), ['notes.md', 'spec.md']);
+  assert.equal(await readFile(path.join(root, 'specs', 'auth', 'spec.md'), 'utf8'), 'Keep this content');
+  assert.deepEqual((await readdir(root)).sort(), ['alias', 'empty', 'external', 'node_modules', 'root.md', 'specs']);
+  assert.deepEqual(await readdir(path.join(root, 'node_modules', 'pkg')), []);
+}));
+
 test('saves Markdown with its BOM and CRLF encoding and a new content version', async () => fixture(async (root, workspace) => {
   await writeFile(path.join(root, 'spec.md'), '\uFEFF# REQ-001\r\n\r\nOriginal.\r\n');
   const document = await workspace.read('spec.md');

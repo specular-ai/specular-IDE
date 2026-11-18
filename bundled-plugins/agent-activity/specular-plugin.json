@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "id": "specular.agent-activity",
+  "title": "Agent activity",
+  "version": "1.0.1",
+  "api": ">=0.2.0 <0.3.0",
+  "customApi": 1,
+  "entry": "dist/index.js",
+  "capabilities": ["workspace.read", "source.navigate"],
+  "models": ["activity@1", "physical@1"],
+  "views": [
+    { "id": "activity", "title": "Agent activity", "kind": "custom" }
+  ]
+}

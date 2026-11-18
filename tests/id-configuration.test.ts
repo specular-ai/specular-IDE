@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
-import { compileIdMatcher, validateIdConfiguration, LEGACY_ID_CONFIGURATION, type IdConfiguration } from '../src/core/id-configuration';
+import { compileIdMatcher, validateIdConfiguration, EMPTY_ID_CONFIGURATION, LEGACY_ID_CONFIGURATION, type IdConfiguration } from '../src/core/id-configuration';
 import { ProjectConfigurationStore } from '../src/core/project-configuration';
 import { Workspace } from '../src/core/workspace';
 import { analyzeDocument, buildIndex } from '../src/core/documents';
@@ -62,16 +62,16 @@ async function fixture() {
   await mkdir(path.join(root, '.specular'));
   return { root, file: path.join(root, '.specular/project.json'), store: new ProjectConfigurationStore(root) };
 }
-test('configuration reload retains last valid rules on error; deletion restores defaults and isolates projects', async () => {
+test('configuration reload retains last valid rules on error; deletion empties categories and isolates projects', async () => {
   const a = await fixture(), b = await fixture();
   try {
-    const absent = await a.store.load(); assert.deepEqual(absent.configuration, LEGACY_ID_CONFIGURATION);
+    const absent = await a.store.load(); assert.deepEqual(absent.configuration, EMPTY_ID_CONFIGURATION);
     await writeFile(a.file, JSON.stringify(custom)); const valid = await a.store.load(); assert.notEqual(valid.revision, absent.revision);
     await writeFile(a.file, '{"key":"privateCategory",bad}'); const invalid = await a.store.load();
     assert.equal(invalid.revision, valid.revision); assert.match(invalid.warning!, /last valid/);
     assert.match(invalid.warning!, /Invalid JSON/); assert.ok(!invalid.warning!.includes('privateCategory'));
     const firstInvalid = await new ProjectConfigurationStore(a.root).load(); assert.deepEqual(firstInvalid.configuration, LEGACY_ID_CONFIGURATION);
-    assert.deepEqual((await b.store.load()).configuration, LEGACY_ID_CONFIGURATION);
+    assert.deepEqual((await b.store.load()).configuration, EMPTY_ID_CONFIGURATION);
     await rm(a.file); assert.equal((await a.store.load()).revision, absent.revision);
   } finally { await rm(a.root, { recursive: true, force: true }); await rm(b.root, { recursive: true, force: true }); }
 });

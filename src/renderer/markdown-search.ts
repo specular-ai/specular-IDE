@@ -25,7 +25,7 @@ export class MarkdownSearchPanel {
     private readonly navigate: (match: MarkdownMatch, text: string, valid: () => boolean) => Promise<void>) {
     this.panel.id = 'markdown-search-panel'; this.panel.hidden = true;
     this.panel.setAttribute('aria-label', 'Markdown text search');
-    this.panel.innerHTML = `<div class="markdown-search-heading"><strong>Search Markdown</strong><button id="markdown-search-close" class="icon-button" aria-label="Close Markdown search">×</button></div>
+    this.panel.innerHTML = `<div class="markdown-search-heading"><strong>Search text</strong><button id="markdown-search-close" class="icon-button" aria-label="Close text search">×</button></div>
       <label for="markdown-search-query">Find text</label><input id="markdown-search-query" type="text" class="search" autocomplete="off" spellcheck="false" placeholder="Text to find…" maxlength="${MAX_SEARCH_QUERY}" />
       <label for="markdown-search-scope">Search in</label><select id="markdown-search-scope"><option value="current">Current file</option><option value="project">Project Markdown</option></select>
       <label class="markdown-search-case"><input id="markdown-search-case" type="checkbox" /> Match case</label>

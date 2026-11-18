@@ -1,7 +1,8 @@
 import { BrowserWindow, ipcMain, session, WebContentsView, type Rectangle } from 'electron';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { OUTPUT_LIMIT, forPlugin, parseResult, validSource, type PluginManifest, type RenderRequest, type RenderResult } from '../shared/plugin-runtime';
+import { OUTPUT_LIMIT, forPlugin, parseDiscoveryResult, parseResult, validSource, type PluginManifest, type RenderRequest, type RenderResult } from '../shared/plugin-runtime';
+import type { DiscoveryRequest, DiscoveryResult } from '../../packages/plugin-api/src/index';
 
 // The supervisor is trusted; only the worker imports external code. CSP is inherited by blob workers.
 function supervisor() {
@@ -9,11 +10,11 @@ function supervisor() {
   let worker: Worker;
   bridge.receive((message: any) => {
     if (message.type === 'init') {
-      const bootstrap = `let plugin; const send = self.postMessage.bind(self); const stringify = JSON.stringify; self.onmessage = async ({data}) => {
+      const bootstrap = `let plugin, exported; const send = self.postMessage.bind(self); const stringify = JSON.stringify; self.onmessage = async ({data}) => {
         try {
-          if (data.type === 'init') { plugin = await import(URL.createObjectURL(new Blob([data.code], {type:'text/javascript'}))); if (typeof plugin.render !== 'function') throw new Error('Missing render export'); send({type:'ready'}); }
+          if (data.type === 'init') { plugin = await import(URL.createObjectURL(new Blob([data.code], {type:'text/javascript'}))); exported = data.exported; if (typeof plugin[exported] !== 'function') throw new Error('Missing export'); send({type:'ready'}); }
           else if (data.type === 'dispose') { await plugin?.dispose?.(); send({type:'disposed'}); }
-          else { const result = stringify(await plugin.render(data.request)); if (typeof result !== 'string' || result.length > 1048576) throw new Error('Response exceeds 1 MiB'); send({type:'result', json:result}); }
+          else { const result = stringify(await plugin[exported](data.request)); if (typeof result !== 'string' || result.length > 1048576) throw new Error('Response exceeds 1 MiB'); send({type:'result', json:result}); }
         } catch { send({type:'error'}); }
       };`;
       worker = new Worker(URL.createObjectURL(new Blob([bootstrap], { type: 'text/javascript' })), { type: 'module' });
@@ -35,7 +36,7 @@ function supervisor() {
 }
 export class PluginRuntime {
   private window: BrowserWindow;
-  private pending?: { resolve: (value: RenderResult) => void; reject: (error: Error) => void; request: RenderRequest; timer: ReturnType<typeof setTimeout> };
+  private pending?: { resolve: (value: any) => void; reject: (error: Error) => void; parse: (json: string) => unknown; timer: ReturnType<typeof setTimeout> };
   private ready: Promise<void>;
   private dead = false;
   private stopping = false;
@@ -44,7 +45,8 @@ export class PluginRuntime {
   private rejectReady!: (error: Error) => void;
   private readyTimer: ReturnType<typeof setTimeout>;
   private listener: (event: Electron.IpcMainEvent, value: any) => void;
-  constructor(private manifest: PluginManifest, code: string, private report: (message: string) => void) {
+  /** Increment 97c: `discover` runs a discovery contribution's export instead of `render`. */
+  constructor(private manifest: PluginManifest, code: string, private report: (message: string) => void, private exported: 'render' | 'discover' = 'render') {
     const partition = session.fromPartition(`plugin-${randomUUID()}`, { cache: false });
     partition.setPermissionCheckHandler(() => false);
     partition.setPermissionRequestHandler((_wc, _permission, done) => done(false));
@@ -67,15 +69,15 @@ export class PluginRuntime {
     this.readyTimer = setTimeout(() => this.fail('Plugin activation timed out.'), 10000);
     this.listener = (event, value) => {
       if (event.sender !== this.window.webContents || event.senderFrame !== this.window.webContents.mainFrame || this.dead) return;
-      if (value?.type === 'supervisor-ready' && !this.supervisorReady) { this.supervisorReady = true; this.window.webContents.send('plugin:command', { type: 'init', code }); }
+      if (value?.type === 'supervisor-ready' && !this.supervisorReady) { this.supervisorReady = true; this.window.webContents.send('plugin:command', { type: 'init', code, exported: this.exported }); }
       else if (value?.type === 'ready' && !this.initialized) { this.initialized = true; clearTimeout(this.readyTimer); resolveReady(); }
       else if (value?.type === 'disposed' && this.stopping) this.destroy();
       else if (value?.type === 'result' && this.pending && typeof value.json === 'string' && value.json.length <= OUTPUT_LIMIT) {
         try {
-          const result = parseResult(value.json, this.pending.request, this.manifest);
+          const result = this.pending.parse(value.json);
           const pending = this.pending; this.pending = undefined; clearTimeout(pending.timer); pending.resolve(result);
         } catch (error) { this.fail(error instanceof Error ? error.message : 'Invalid plugin response.'); }
-      } else this.fail('Plugin failed or sent an invalid response. Reopen its view to retry.');
+      } else this.fail(this.exported === 'discover' ? 'Discovery failed or sent an invalid response.' : 'Plugin failed or sent an invalid response. Reopen its view to retry.');
     };
     ipcMain.on('plugin:response', this.listener);
     const nonce = randomUUID();
@@ -89,8 +91,18 @@ export class PluginRuntime {
     if (this.dead) throw new Error('Plugin is stopped. Reopen its view to retry.');
     if (this.pending) throw new Error('Plugin is still processing a snapshot.');
     return new Promise<RenderResult>((resolve, reject) => {
-      this.pending = { resolve, reject, request, timer: setTimeout(() => this.fail('Plugin timed out after 5 seconds. Reopen its view to retry.'), 5000) };
+      this.pending = { resolve, reject, parse: json => parseResult(json, request, this.manifest), timer: setTimeout(() => this.fail('Plugin timed out after 5 seconds. Reopen its view to retry.'), 5000) };
       this.window.webContents.send('plugin:command', { type: 'render', request: forPlugin(request, this.manifest) });
+    });
+  }
+  /** Increment 97c: one discovery run, bounded in time; the result's shape is checked here and its content by the review. */
+  async discover(request: DiscoveryRequest, timeout = 10000) {
+    await this.ready;
+    if (this.dead) throw new Error('Plugin is stopped.');
+    if (this.pending) throw new Error('Plugin is still discovering.');
+    return new Promise<DiscoveryResult>((resolve, reject) => {
+      this.pending = { resolve, reject, parse: json => parseDiscoveryResult(json, request), timer: setTimeout(() => this.fail(`Discovery timed out after ${timeout / 1000} seconds.`), timeout) };
+      this.window.webContents.send('plugin:command', { type: 'discover', request });
     });
   }
   private fail(message: string) {
@@ -134,17 +146,32 @@ function customSupervisor() {
     else if (data.type === 'updated' && typeof data.requestId === 'string' && data.requestId.length <= 128) bridge.send({ type: 'updated', requestId: data.requestId });
     else if (data.type === 'state' && typeof data.state === 'string' && data.state.length <= 65536) bridge.send({ type: 'state', state: data.state });
     else if (data.type === 'navigate' && data.source && typeof data.source === 'object') bridge.send({ type: 'navigate', source: data.source });
+    // Increment 94: summary calls name a subject only; the host builds any text sent to a model.
+    else if (data.type === 'summary' && typeof data.id === 'string' && data.id.length <= 64 && ['get', 'generate', 'cancel'].includes(data.op) && data.subject && typeof data.subject === 'object' && JSON.stringify(data).length <= 65536)
+      bridge.send({ type: 'summary', id: data.id, op: data.op, subject: data.subject, ...(data.options && typeof data.options === 'object' ? { options: data.options } : {}) });
     else bridge.send({ type: 'error' });
   });
   bridge.send({ type: 'supervisor-ready' });
 }
 
 function customFrame() {
-  let plugin: any, instance: any;
+  let plugin: any, instance: any, summaries: any, calls = 0;
   const root = document.querySelector('#plugin-root') as HTMLElement;
+  const pending = new Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>();
+  const call = (op: string, subject: unknown, options?: unknown) => new Promise((resolve, reject) => {
+    const id = `summary-${++calls}`; pending.set(id, { resolve, reject });
+    parent.postMessage({ type: 'summary', id, op, subject, ...(options === undefined ? {} : { options }) }, '*');
+  });
   addEventListener('message', async ({ data }) => {
+    if (data?.type === 'summary-result') {
+      const waiting = pending.get(data.id); pending.delete(data.id);
+      if (waiting) { if (data.ok) waiting.resolve(data.record ?? undefined); else waiting.reject(new Error(String(data.message ?? 'Summary failed.'))); }
+      return;
+    }
     try {
       if (data.type === 'init') {
+        if (data.summaries) summaries = Object.freeze({ get: (subject: unknown) => call('get', subject), generate: (subject: unknown, options: unknown) => call('generate', subject, options),
+          cancel: (subject: unknown) => { parent.postMessage({ type: 'summary', id: `summary-${++calls}`, op: 'cancel', subject }, '*'); } });
         plugin = await import(URL.createObjectURL(new Blob([data.code], { type: 'text/javascript' })));
         if (typeof plugin.activate !== 'function') throw new Error('Missing activate export');
         parent.postMessage({ type: 'ready' }, '*');
@@ -155,7 +182,7 @@ function customFrame() {
           document.documentElement.style.colorScheme = appearance.mode;
           for (const [name, value] of Object.entries(appearance.colors)) document.documentElement.style.setProperty('--specular-' + name, String(value));
         }
-        if (!instance) { instance = await plugin.activate({ root, request: data.request, openSource: (source: any) => parent.postMessage({ type: 'navigate', source }, '*'), saveState: (state: string) => { if (typeof state !== 'string' || state.length > 65536) throw new Error('Custom state exceeds 64 KiB.'); parent.postMessage({ type: 'state', state }, '*'); } }); if (!instance || typeof instance.update !== 'function') throw new Error('Missing custom view update'); }
+        if (!instance) { instance = await plugin.activate({ root, request: data.request, openSource: (source: any) => parent.postMessage({ type: 'navigate', source }, '*'), saveState: (state: string) => { if (typeof state !== 'string' || state.length > 65536) throw new Error('Custom state exceeds 64 KiB.'); parent.postMessage({ type: 'state', state }, '*'); }, ...(summaries ? { summaries } : {}) }); if (!instance || typeof instance.update !== 'function') throw new Error('Missing custom view update'); }
         else { if (typeof instance.update !== 'function') throw new Error('Missing custom view update'); await instance.update(data.request); }
         parent.postMessage({ type: 'updated', requestId: data.request.requestId }, '*');
       } else if (data.type === 'dispose') { await instance?.dispose?.(); parent.postMessage({ type: 'disposed' }, '*'); }
@@ -181,7 +208,8 @@ export class CustomPluginRuntime {
   constructor(private parent: BrowserWindow, private manifest: PluginManifest, code: string,
     private report: (message: string) => void,
     private navigate: (request: RenderRequest, source: unknown) => void,
-    private saveState: (request: RenderRequest, state: string) => void = () => {}) {
+    private saveState: (request: RenderRequest, state: string) => void = () => {},
+    private summary: (request: RenderRequest, call: { id: string; op: 'get' | 'generate' | 'cancel'; subject: unknown; options?: unknown }) => void = () => {}) {
     const partition = session.fromPartition(`plugin-custom-${randomUUID()}`, { cache: false });
     partition.setPermissionCheckHandler(() => false);
     partition.setPermissionRequestHandler((_wc, _permission, done) => done(false));
@@ -207,7 +235,7 @@ export class CustomPluginRuntime {
     this.listener = (event, value) => {
       if (event.sender !== this.view.webContents || event.senderFrame !== this.view.webContents.mainFrame || this.dead) return;
       if (value?.type === 'supervisor-ready' && !this.supervisorReady) {
-        this.supervisorReady = true; this.view.webContents.send('plugin:command', { type: 'init', code });
+        this.supervisorReady = true; this.view.webContents.send('plugin:command', { type: 'init', code, summaries: this.summaries });
       } else if (value?.type === 'ready' && !this.initialized) {
         this.initialized = true; clearTimeout(this.readyTimer); resolveReady();
       } else if (value?.type === 'updated' && this.pending && value.requestId === this.pending.requestId) {
@@ -216,8 +244,10 @@ export class CustomPluginRuntime {
         const pending = this.pending; this.pending = undefined; clearTimeout(pending.timer); pending.resolve();
       } else if (value?.type === 'navigate' && this.current && this.manifest.capabilities.includes('source.navigate') && validSource(value.source, this.current)) {
         this.navigate(this.current, value.source);
-      } else if (value?.type === 'state' && this.current && this.manifest.customApi === 1 && typeof value.state === 'string' && value.state.length <= 65536) {
+      } else if (value?.type === 'state' && this.current && this.manifest.customApi !== undefined && typeof value.state === 'string' && value.state.length <= 65536) {
         this.saveState(this.current, value.state);
+      } else if (value?.type === 'summary' && this.current && this.summaries && typeof value.id === 'string' && ['get', 'generate', 'cancel'].includes(value.op)) {
+        this.summary(this.current, { id: value.id, op: value.op, subject: value.subject, ...(value.options === undefined ? {} : { options: value.options }) });
       } else if (value?.type === 'disposed' && this.stopping) this.destroy();
       else this.fail('Plugin failed or sent an invalid response. Reopen its view to retry.');
     };
@@ -231,6 +261,12 @@ export class CustomPluginRuntime {
     const frameHtml = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${frameCsp}"><style>html,body,#plugin-root{box-sizing:border-box;min-height:100%;margin:0}body{background:var(--specular-background,#101820);color:var(--specular-text,#d8e2e8);font:14px system-ui,sans-serif}button,input,select,textarea{font:inherit}</style><main id="plugin-root"></main><script nonce="${frameNonce}">(${customFrame.toString()})()</script>`;
     partition.protocol.handle('specular-plugin-ui', request => request.url === 'specular-plugin-ui://plugin/index.html' ? new Response(frameHtml, { headers: { 'Content-Type': 'text/html', 'Content-Security-Policy': frameCsp } }) : new Response('Forbidden', { status: 403 }));
     void this.view.webContents.loadURL('specular-plugin://host/custom.html').catch(() => this.fail('Plugin sandbox could not start.'));
+  }
+  /** Increment 94: summaries need customApi 2 and the declared capability. */
+  private get summaries() { return this.manifest.customApi === 2 && this.manifest.capabilities.includes('summary.generate'); }
+  /** Delivers a host summary result to the frame's pending call. */
+  summaryResult(id: string, result: { ok: true; record?: unknown } | { ok: false; message: string }) {
+    if (!this.dead) this.view.webContents.send('plugin:command', { type: 'summary-result', id, ...result });
   }
   async render(request: RenderRequest, bounds: Rectangle) {
     await this.ready;

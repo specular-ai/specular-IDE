@@ -70,7 +70,7 @@ test('proposals without rules need a keyword site or derived elements, and their
   const broken = structuredClone(p); byName(broken, 'Scenario').category.parent = 'nowhere';
   assert.throws(() => validateProposal(broken, openspec), /must name other suggestions/);
   const bare = structuredClone(p); delete byName(bare, 'Requirement').category.idDefinitionSites;
-  assert.throws(() => validateProposal(bare, openspec), /keyword heading site or derived elements/);
+  assert.throws(() => validateProposal(bare, openspec), /keyword heading site, derived elements, or numbered list items/);
 });
 
 test('an existing category with the same keyword or derive pattern is recognized as the existing convention', () => {

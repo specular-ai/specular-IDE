@@ -24,7 +24,7 @@ export async function expandConfigurationEntries(page: Page) {
 
 /** Open the discovery methods used by existing workflow checks. */
 export async function expandDiscoveryMethods(page: Page) {
-  for (const id of ['discovery-patterns']) {
+  for (const id of ['discovery-agent', 'discovery-patterns']) {
     const section = page.locator('#' + id);
     if (await section.getAttribute('open') === null) await section.locator(':scope > summary').click();
   }

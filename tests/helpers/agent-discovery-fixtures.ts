@@ -50,6 +50,15 @@ export const STATUS_DRAFT = { ...GOOD_DRAFT,
 export const STATUS_EXTRA = { statusRationale: 'Tasks are tracked with checkboxes: [x] is Done and [ ] is Open.', dateRationale: 'Only Created fields and dated list entries carry dates.',
   gaps: [{ description: 'Task priorities are written as [P] markers that no status site reads.', examples: [{ path: 'specs/001-login/tasks.md', line: 3 }] }] };
 
+/** Increment 96: the fake agents' `folders` scenario adds a feature generator for the spec folders. */
+export const FOLDER_DRAFT = { ...GOOD_DRAFT, folderGenerators: [{ key: 'specs', target: 'features', pattern: 'specs/*', exclusions: [] }] };
+export const FOLDER_EXTRA = { folderRationale: 'Each folder in specs/ holds one feature specification.' };
+/** Increment 96h: the fake agents' `tags` scenario tags the tasks by their task list's heading. */
+export const TAG_DRAFT = { ...GOOD_DRAFT, categories: GOOD_DRAFT.categories.map(category => category.key === 'tasks' ? { ...category, sectionTags: [{ heading: 'Tasks', tag: 'list:tasks' }] } : category) };
+export const TAG_EXTRA = { tagRationale: 'Every task sits under its task list heading: list:tasks 3.' };
+const draftFor = (scenario: string) => scenario === 'statuses' ? STATUS_DRAFT : scenario === 'folders' ? FOLDER_DRAFT : scenario === 'tags' ? TAG_DRAFT : GOOD_DRAFT;
+const extraFor = (scenario: string) => scenario === 'statuses' ? STATUS_EXTRA : scenario === 'folders' ? FOLDER_EXTRA : scenario === 'tags' ? TAG_EXTRA : {};
+
 /** A project whose statuses need mapping: decorated Spec Kit values, Kiro checkboxes, and dates (87). */
 export const STATUS_PROJECT: Record<string, string> = {
   'specs/001-login/spec.md': '# Login\n\n## FR-001 Sign in\n\n**Status**: 🔜 Planned\n\n## FR-002 Expiry\n\n**Status**: ✅ Complete\n\n## FR-003 Export\n\n**Status**: Draft\n\n**Created**: 2026-01-05\n',
@@ -140,12 +149,12 @@ export const standardScript: AgentScript = async client => {
 };
 
 /** A fake headless `claude` (npm-style .cmd launcher) that starts the MCP server from --mcp-config and streams JSON events. */
-export async function fakeClaude(scenario: 'standard' | 'statuses' | 'violation' | 'extra-tool' | 'signed-out' | 'no-submit' | 'follow-up' | 'slow') {
+export async function fakeClaude(scenario: 'standard' | 'statuses' | 'folders' | 'tags' | 'violation' | 'extra-tool' | 'signed-out' | 'no-submit' | 'follow-up' | 'slow' | 'bare-name' | 'refused-loop') {
   const base = path.resolve('.cache/agent-discovery-tests'); await mkdir(base, { recursive: true });
   const root = await mkdtemp(path.join(base, 'claude ')); const executable = path.join(root, 'claude.cmd'), script = path.join(root, 'claude.cjs');
   await writeFile(executable, `@echo off\r\nif "%~1"=="--version" (\r\necho 2.1.300 ^(Claude Code^)\r\nexit /b 0\r\n)\r\n"${process.execPath}" "${script}" %*\r\n`);
   await writeFile(script, `const fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process');
-const root=${JSON.stringify(root)},scenario=${JSON.stringify(scenario)},draft=${JSON.stringify(scenario === 'statuses' ? STATUS_DRAFT : GOOD_DRAFT)},rationale=${JSON.stringify(RATIONALE)},extra=${JSON.stringify(scenario === 'statuses' ? STATUS_EXTRA : {})};
+const root=${JSON.stringify(root)},scenario=${JSON.stringify(scenario)},draft=${JSON.stringify(draftFor(scenario))},rationale=${JSON.stringify(RATIONALE)},extra=${JSON.stringify(extraFor(scenario))};
 const args=process.argv.slice(2),flag=name=>args[args.indexOf(name)+1];
 const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 const queue=[];let waiter,closed=false;const take=v=>{const w=waiter;waiter=undefined;w(v);};
@@ -167,6 +176,9 @@ const next=()=>queue.length?Promise.resolve(queue.shift()):closed?Promise.resolv
   await call('project_overview',{});
   if(scenario==='slow')await new Promise(r=>setTimeout(r,60000));
   if(scenario==='violation'){send({type:'assistant',message:{model:'fake',content:[{type:'tool_use',id:'x',name:'Bash',input:{command:'type secrets.env'}}]}});}
+  // Increment 107: a Specular tool by its bare name, which Claude Code refuses with an error; the loop repeats it until the run stops.
+  if(scenario==='bare-name'){send({type:'assistant',message:{model:'fake',content:[{type:'tool_use',id:'b',name:'read_markdown',input:{path:'specs/001/spec.md'}}]}});}
+  if(scenario==='refused-loop'){for(let i=0;i<5;i++)send({type:'assistant',message:{model:'fake',content:[{type:'tool_use',id:'b'+i,name:i%2?'list_matches':'read_markdown',input:{}}]}});await new Promise(r=>setTimeout(r,3000));}
   const evaluated=JSON.parse((await call('evaluate_configuration',{configuration:draft})).result.content[0].text);
   const submits=scenario!=='no-submit'&&scenario!=='follow-up';
   if(submits)await call('submit_proposal',{configuration:draft,rationale,...extra});
@@ -186,12 +198,12 @@ const next=()=>queue.length?Promise.resolve(queue.shift()):closed?Promise.resolv
 }
 
 /** A fake `codex app-server` that starts the per-thread MCP server and runs a scripted agent turn over it. */
-export async function fakeCodex(scenario: 'standard' | 'statuses' | 'violation' | 'no-submit' | 'follow-up' | 'extra-server') {
+export async function fakeCodex(scenario: 'standard' | 'statuses' | 'folders' | 'tags' | 'violation' | 'no-submit' | 'follow-up' | 'extra-server') {
   const base = path.resolve('.cache/agent-discovery-tests'); await mkdir(base, { recursive: true });
   const root = await mkdtemp(path.join(base, 'codex-')); const executable = path.join(root, 'codex.cmd'), script = path.join(root, 'server.cjs');
   await writeFile(executable, `@echo off\r\nif "%~1"=="--version" (\r\necho codex-cli 0.155.1\r\nexit /b 0\r\n)\r\n"${process.execPath}" "${script}"\r\n`);
   await writeFile(script, `const fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process');
-const root=${JSON.stringify(root)},scenario=${JSON.stringify(scenario)},draft=${JSON.stringify(scenario === 'statuses' ? STATUS_DRAFT : GOOD_DRAFT)},rationale=${JSON.stringify(RATIONALE)},extra=${JSON.stringify(scenario === 'statuses' ? STATUS_EXTRA : {})};
+const root=${JSON.stringify(root)},scenario=${JSON.stringify(scenario)},draft=${JSON.stringify(draftFor(scenario))},rationale=${JSON.stringify(RATIONALE)},extra=${JSON.stringify(extraFor(scenario))};
 const log=m=>fs.appendFileSync(path.join(root,'log.jsonl'),JSON.stringify(m)+'\\n');
 const send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 let loggedIn=false,config,thread='thread-1',turn='turn-1',interrupted=false,servers=[];

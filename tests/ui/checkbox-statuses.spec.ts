@@ -6,7 +6,7 @@ import path from 'node:path';
 let app: ElectronApplication, page: Page, root: string, project: string;
 const lists = { headings: { enabled: false, levels: [1, 2, 3, 4, 5, 6], mode: 'start' }, tables: { enabled: false, column: 'ID', mode: 'exact' }, lists: { enabled: true, types: ['unordered'], mode: 'start' } };
 const config = { version: 1, categories: [{ key: 'task', name: 'Tasks', role: 'task', idDefinitionSites: lists }], rules: [{ key: 't', category: 'task', pattern: '^\\d+(?:\\.\\d+)*' }] };
-const source = '# Tasks\n\n- [x] 1. Write tests\n  - [x] 1.1 Unit tests\n  - [ ] 1.2 Integration tests\n- [-] 2. Phase one\n';
+const source = '# Tasks\n\n- [x] 1. Write tests\n  - [x] 1.1 Unit tests\n  - [ ] 1.2 Integration tests\n- [-] 2. Phase one\n- [~] 3. Waiting for CI\n- [>] 4. Forwarded\n';
 const card = (id: string) => page.locator(`#lens-results .lens-card[data-id="${id}"]`).first();
 const statusSites = () => page.locator('#config-status-sites');
 test.beforeEach(async () => {
@@ -25,22 +25,26 @@ test.afterEach(async ({}, info) => {
 test('the checkbox site is enabled, a mapping is edited, and task statuses preview, apply, and group', async () => {
   await expect(card('1').locator('.status-badge')).toHaveCount(0);
   await page.locator('#project-config-open').click(); await page.getByRole('tab', { name: 'Definition and status sites', exact: true }).click();
-  const enable = statusSites().getByLabel('Enable checkbox statuses');
+  const enable = statusSites().getByLabel('Statuses in task checkboxes');
   await expect(enable).not.toBeChecked();
   await expect(statusSites().getByLabel('Checkbox marker 4', { exact: true })).toHaveValue('-');
-  await enable.check();
+  // Checking a section does not open it; the title does.
+  await enable.check(); await statusSites().getByText('Statuses in task checkboxes', { exact: true }).click();
   await statusSites().getByLabel('Status value for checkbox marker 4', { exact: true }).fill('Working');
   await page.locator('#config-preview').click(); await expect(page.locator('#config-status')).toContainText('Preview ready');
   await page.locator('#config-filter').selectOption('statuses');
   const row = (id: string) => page.locator('.config-status-result').filter({ has: page.locator('button.config-result', { hasText: new RegExp(`^${id.replace('.', '\\.')}\\b`) }) });
   await expect(row('2')).toContainText('checkboxes: Working');
   await expect(row('1.2')).toContainText('checkboxes: Open');
+  // Increment 105: [~] is in progress by default; [>] maps to nothing and is reported.
+  await expect(row('3')).toContainText('checkboxes: In progress');
+  await expect(page.locator('#config-summary')).toContainText('Checkbox markers without a status: > 1');
   await page.locator('#config-apply').click(); await expect(page.locator('#project-configuration-dialog')).not.toBeVisible();
   const saved = JSON.parse(await readFile(path.join(project, '.specular/project.json'), 'utf8'));
-  expect(saved.statusSites.checkboxes).toEqual({ enabled: true, markers: { x: 'Done', X: 'Done', ' ': 'Open', '-': 'Working' } });
+  expect(saved.statusSites.checkboxes).toEqual({ enabled: true, markers: { x: 'Done', X: 'Done', ' ': 'Open', '-': 'Working', '~': 'In progress', '/': 'In progress' } });
   await expect(card('1').locator('.status-badge').first()).toHaveText('Done');
   await expect(card('2').locator('.status-badge').first()).toHaveText('Working');
   await page.getByLabel('Group definitions by').selectOption('status');
-  await expect(page.locator('.lens-group > summary')).toHaveText(['Done2 IDs', 'Open1 ID', 'Working1 ID']);
+  await expect(page.locator('.lens-group > summary')).toHaveText(['Done2 IDs', 'In progress1 ID', 'No status1 ID', 'Open1 ID', 'Working1 ID']);
   expect(await readFile(path.join(project, 'tasks.md'), 'utf8')).toBe(source);
 });

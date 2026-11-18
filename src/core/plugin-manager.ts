@@ -114,9 +114,11 @@ export class PluginManager {
     } catch (error) { await rm(work, { recursive: true, force: true }); throw error; }
   }
 
-  async install(source: string, replace = false) {
+  /** `accept` returns why the package does not fit the install path (97c: abstractions or profiles), before anything is replaced. */
+  async install(source: string, replace = false, accept?: (manifest: PluginManifest) => string | undefined) {
     const staged = await this.stage(source); const id = staged.plugin.manifest.id;
     try {
+      const refusal = accept?.(staged.plugin.manifest); if (refusal) throw new Error(refusal);
       if (this.entries.has(id) && !replace) return { installed: false as const, manifest: staged.plugin.manifest };
       const target = path.join(this.root, id), backup = path.join(this.root, `.backup-${randomUUID()}`);
       const current = this.entries.get(id);

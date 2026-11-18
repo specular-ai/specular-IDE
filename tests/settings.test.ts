@@ -173,3 +173,51 @@ test('session retention is bounded and failed updates retain the previous worksp
   assert.match(failed.warning!, /could not be saved/);
   assert.deepEqual(settings.workspaceSession(path.join(root, '10'))?.files, ['README.md']);
 }));
+
+test('the abstraction install folder persists and ignores invalid values', () => fixture(async (root, file) => {
+  const settings = await Settings.load(file);
+  assert.equal(settings.abstractionFolder(), undefined);
+  await settings.saveAbstractionFolder('relative/folder');
+  assert.equal(settings.abstractionFolder(), undefined);
+  await settings.saveAbstractionFolder(root);
+  assert.equal((await Settings.load(file)).abstractionFolder(), root);
+  await writeFile(file, JSON.stringify({ version: 1, abstractionFolder: 'not absolute' }));
+  assert.equal((await Settings.load(file)).abstractionFolder(), undefined);
+}));
+
+test('panel layout recovers fields independently, omits defaults, and rejects invalid writes', () => fixture(async (root, file) => {
+  assert.deepEqual((await Settings.load(file)).panelLayout(), {});
+  for (const invalid of [null, [], 'wide', -1, 159, 4001, 200.5, '300']) {
+    await writeFile(file, JSON.stringify({ version: 1, fontSizes: { source: 18, preview: 20 }, panelLayout: { explorerWidth: invalid, lensWidth: 320, sourceRatio: 0.4 } }));
+    const settings = await Settings.load(file);
+    assert.deepEqual(settings.panelLayout(), { lensWidth: 320, sourceRatio: 0.4 });
+    const before = await readFile(file, 'utf8');
+    await assert.rejects(settings.savePanelLayout({ explorerWidth: 300, lensWidth: invalid }), /Panel widths/);
+    assert.equal(await readFile(file, 'utf8'), before);
+  }
+  for (const ratio of [-0.1, 1.5, Number.NaN, '0.5']) {
+    await writeFile(file, JSON.stringify({ version: 1, panelLayout: { sourceRatio: ratio, explorerWidth: 250 } }));
+    assert.deepEqual((await Settings.load(file)).panelLayout(), { explorerWidth: 250 });
+  }
+  const settings = await Settings.load(file);
+  await assert.rejects(settings.savePanelLayout({ explorerWidth: 300, extra: 1 }), /Panel widths/);
+  await assert.rejects(settings.savePanelLayout(null), /Panel widths/);
+  await Promise.all([settings.savePanelLayout({ explorerWidth: 300 }), settings.saveFontSizes({ source: 15, preview: 16 }), settings.savePanelLayout({ explorerWidth: 310, sourceRatio: 0.35 })]);
+  const restored = await Settings.load(file);
+  assert.deepEqual(restored.panelLayout(), { explorerWidth: 310, sourceRatio: 0.35 });
+  assert.deepEqual(restored.fontSizes(), { source: 15, preview: 16 });
+  await restored.savePanelLayout({});
+  assert.deepEqual((await Settings.load(file)).panelLayout(), {});
+}));
+
+test('panel layout keeps a hidden source only as true, and rejects other values', () => fixture(async (root, file) => {
+  for (const invalid of [false, 'true', 1, null]) {
+    await writeFile(file, JSON.stringify({ version: 1, panelLayout: { sourceHidden: invalid, lensWidth: 300 } }));
+    const settings = await Settings.load(file);
+    assert.deepEqual(settings.panelLayout(), { lensWidth: 300 });
+    await assert.rejects(settings.savePanelLayout({ sourceHidden: invalid }), /sourceHidden/);
+  }
+  const settings = await Settings.load(file);
+  await settings.savePanelLayout({ sourceHidden: true, sourceRatio: 0.6 });
+  assert.deepEqual((await Settings.load(file)).panelLayout(), { sourceHidden: true, sourceRatio: 0.6 });
+}));

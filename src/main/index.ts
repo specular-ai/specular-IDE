@@ -1,6 +1,8 @@
 import { PluginManager } from '../core/plugin-manager';
 import { CustomPluginRuntime, PluginRuntime } from './plugin-runtime';
-import { parseRequest } from '../shared/plugin-runtime';
+import { INPUT_LIMIT, parseRequest } from '../shared/plugin-runtime';
+import { markdownModel } from '../core/markdown-model';
+import { randomUUID } from 'node:crypto';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, net, protocol, session, safeStorage } from 'electron';
 import { watch, type FSWatcher } from 'node:fs';
 import { cp, mkdir, readdir } from 'node:fs/promises';
@@ -21,8 +23,13 @@ import { Worker } from 'node:worker_threads';
 import { AgentToolHost } from '../core/agent-tool-host';
 import { CodexDiscoveryAdapter } from '../core/codex-discovery';
 import { ClaudeDiscoveryAdapter } from '../core/claude-discovery';
+import { claudeSummaryRunner, codexSummaryRunner } from '../core/summary-runners';
+import { readSummary, writeSummary } from '../core/summary-store';
+import { SUMMARY_INSTRUCTION, validSubject, validStoredSummary } from '../core/summaries';
+import { ActivityReader, activityHomes } from '../core/activity/reader';
+import { API_VERSION, type ActivityModel, type PluginManifest } from '../../packages/plugin-api/src/index';
 import { DiscoveryRun, runLimits, toolCallLimitError, type AgentDiscoveryRequest, type ProgressKind } from '../core/discovery-run';
-import { validateIdConfiguration } from '../core/id-configuration';
+import { analyzedDocuments, validateIdConfiguration } from '../core/id-configuration';
 
 app.setName('Specular');
 if (process.env.SPECULAR_USER_DATA) app.setPath('userData', path.resolve(process.env.SPECULAR_USER_DATA));
@@ -116,7 +123,7 @@ async function openWorkspace(root: string, recordHistory = true) {
 
 app.whenReady().then(async () => {
   settings = await Settings.load(path.join(app.getPath('userData'), 'settings.json'));
-  pluginManager = await PluginManager.load(path.join(app.getPath('userData'), 'plugins'), [path.join(__dirname, 'bundled-plugins', 'relationships')]);
+  pluginManager = await PluginManager.load(path.join(app.getPath('userData'), 'plugins'), [path.join(__dirname, 'bundled-plugins', 'relationships'), path.join(__dirname, 'bundled-plugins', 'feature-dossier'), path.join(__dirname, 'bundled-plugins', 'agent-activity')]);
   const renderer = path.join(__dirname, 'renderer');
   protocol.handle('specular', request => {
     const url = new URL(request.url);
@@ -165,6 +172,7 @@ app.whenReady().then(async () => {
         ...(settings.snapshot().projects.length ? [{ type: 'separator' as const }] : [{ label: 'No recent projects', enabled: false }]),
         { label: 'Manage recent projects…', click: action('recent-projects') },
       ] },
+      { label: 'Close project', enabled: !!workspace, click: action('close-project') },
       { label: 'New Markdown file…', accelerator: 'CmdOrCtrl+N', click: action('new-file') },
       { label: 'Close tab', accelerator: 'CmdOrCtrl+W', click: action('close-tab') },
       { type: 'separator' }, { role: 'quit' },
@@ -174,11 +182,25 @@ app.whenReady().then(async () => {
       { label: 'Go to definition', accelerator: 'F12', click: action('definition') },
       { label: 'Find references', accelerator: 'Shift+F12', click: action('references') },
       { label: 'Search project IDs', accelerator: 'CmdOrCtrl+P', click: action('search') },
-      { label: 'Find in current Markdown file', click: action('markdown-find') },
-      { label: 'Search project Markdown', click: action('markdown-search') },
+      { label: 'Find text in current file', click: action('markdown-find') },
+      { label: 'Search text in project', click: action('markdown-search') },
     ] },
     { label: 'View', submenu: [{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'toggleDevTools' }] },
+    // 97c: profiles describe a project's conventions, so they are installed and managed here rather than with the abstractions.
+    { label: 'Project', submenu: [
+      { label: 'Project configuration…', click: action('project-configuration') },
+      { type: 'separator' },
+      { label: 'Manage profiles…', click: action('profile-manager') },
+      { label: 'Install profile folder…', click: action('profile-install-folder') },
+      { label: 'Install profile archive (.zip)…', click: action('profile-install-archive') },
+    ] },
     { label: 'Agents', submenu: [{ label: 'Agent setup…', click: action('agent-setup') }, { label: 'Codex conversation…', click: action('codex-conversation') }] },
+    { label: 'Abstractions', submenu: [
+      { label: 'Manage abstractions…', click: action('plugin-manager') },
+      { type: 'separator' },
+      { label: 'Install abstraction folder…', click: action('plugin-install-folder') },
+      { label: 'Install abstraction archive (.zip)…', click: action('plugin-install-archive') },
+    ] },
     { label: 'Terminal', submenu: [{ label: 'Show/hide terminals', accelerator: 'CmdOrCtrl+Shift+T', click: action('terminals') }] },
   ]));
   };
@@ -258,7 +280,10 @@ app.whenReady().then(async () => {
   }));
   handle('workspace:choose', () => switchWorkspace(async () => {
     if (dirty) throw new Error('Pending Markdown changes must be resolved before switching projects.');
-    const result = await dialog.showOpenDialog(window, { title: 'Open a Specular project', properties: ['openDirectory'] });
+    // Start beside the most recent project (not the bundled demo copy), so it and its sibling folders are in view.
+    const demo = path.join(app.getPath('userData'), 'demo-project');
+    const recent = settings.snapshot().projects.find(project => path.resolve(project.path) !== demo);
+    const result = await dialog.showOpenDialog(window, { title: 'Open a Specular project', properties: ['openDirectory'], ...(recent ? { defaultPath: path.dirname(recent.path) } : {}) });
     return result.canceled ? null : openWorkspace(result.filePaths[0]);
   }));
   handle('workspace:demo', () => switchWorkspace(async () => {
@@ -271,12 +296,26 @@ app.whenReady().then(async () => {
     await cp(sample, destination, { recursive: true, force: false, errorOnExist: false });
     return openWorkspace(destination);
   }));
+  handle('workspace:close', () => switchWorkspace(async () => {
+    if (dirty) throw new Error('Pending Markdown changes must be resolved before closing the project.');
+    watcher?.close(); watcher = undefined;
+    clearTimeout(changedTimer);
+    stopPlugins();
+    workspace = undefined;
+    conversation?.setOpenProject(undefined);
+    // Closing is deliberate: the next launch starts on the welcome page rather than reopening this project.
+    await settings.forgetLastProject();
+    rebuildMenu();
+    return null;
+  }));
   handle('recent:list', () => settings.snapshot());
   handle('appearance:theme', () => settings.theme());
   handle('appearance:save-theme', value => settings.saveTheme(value));
   handle('appearance:ready', () => { window.show(); });
   handle('appearance:font-sizes', () => settings.fontSizes());
   handle('appearance:save-font-sizes', sizes => settings.saveFontSizes(sizes));
+  handle('appearance:panel-layout', () => settings.panelLayout());
+  handle('appearance:save-panel-layout', layout => settings.savePanelLayout(layout));
   handle('recent:open', root => switchWorkspace(async () => {
     const target = textArg(root, 4096);
     if (!settings.contains(target)) throw new Error('The recent entry is no longer available.');
@@ -286,6 +325,51 @@ app.whenReady().then(async () => {
   handle('recent:remove', async root => { const result = await settings.remove(textArg(root, 4096)); rebuildMenu(); return result; });
   handle('recent:clear', async () => { const result = await settings.clear(); rebuildMenu(); return result; });
   handle('workspace:refresh', () => active().snapshot());
+  // Increment 95: agent activity from the agents' local logs, read only when the project opted in, rescanned at most every 10 s unless forced.
+  const activityReader = new ActivityReader(activityHomes(process.env));
+  let activityScan: { root: string; enabled: boolean; at: number; model: ActivityModel } | undefined, activityRun: Promise<unknown> | undefined;
+  handle('activity:model', async force => {
+    // A request during a rescan (such as Refresh's) waits for it rather than returning the older scan.
+    while (activityRun) await activityRun.catch(() => undefined);
+    const root = active().root, enabled = settings.activityEnabled(root);
+    if (force !== true && activityScan && activityScan.root === root && activityScan.enabled === enabled && Date.now() - activityScan.at < 10_000) return activityScan.model;
+    const run = activityReader.model(root, enabled).then(model => { activityScan = { root, enabled, at: Date.now(), model }; return model; });
+    activityRun = run.finally(() => { if (activityRun === guard) activityRun = undefined; });
+    const guard = activityRun;
+    return run;
+  });
+  handle('activity:enabled', () => settings.activityEnabled(active().root));
+  handle('activity:set-enabled', async enabled => {
+    if (typeof enabled !== 'boolean') throw new Error('Invalid activity setting.');
+    activityScan = undefined;
+    return settings.saveActivityEnabled(active().root, enabled);
+  });
+  // Increment 94: the summary service. The renderer builds input from the models; main runs the agent and owns the files.
+  const summaryRuns = new Map<string, AbortController>();
+  handle('summary:reply', (id, call, result) => {
+    const entry = pluginRuntimes.get(textArg(id, 128)), callId = textArg(call, 64);
+    if (!entry?.custom || !result || typeof result !== 'object') return;
+    const value = result as Record<string, unknown>;
+    (entry.runtime as CustomPluginRuntime).summaryResult(callId, value.ok === true ? { ok: true, ...(value.record === undefined ? {} : { record: value.record }) } : { ok: false, message: typeof value.message === 'string' ? value.message.slice(0, 500) : 'Summary failed.' });
+  });
+  handle('summary:read', async subject => { if (!validSubject(subject)) throw new Error('Invalid summary subject.'); return readSummary(active().root, subject); });
+  handle('summary:write', async summary => { if (!validStoredSummary(summary)) throw new Error('Invalid summary record.'); await writeSummary(active().root, summary); });
+  handle('summary:consent', () => settings.summaryConsent(active().root));
+  handle('summary:set-consent', granted => { if (typeof granted !== 'boolean') throw new Error('Invalid consent.'); return settings.saveSummaryConsent(active().root, granted); });
+  handle('summary:cancel', runId => { summaryRuns.get(textArg(runId, 80))?.abort(); });
+  handle('summary:run', async value => {
+    const request = (value ?? {}) as Record<string, unknown>;
+    const runId = textArg(request.runId, 80), input = textArg(request.input, 30_000);
+    if (request.agent !== 'codex' && request.agent !== 'claude') throw new Error('Choose Codex or Claude Code.');
+    const model = request.model === undefined ? undefined : textArg(request.model, 200).trim() || undefined;
+    if (!settings.summaryConsent(active().root)) return { ok: false, message: 'Summaries are not allowed for this project.' };
+    const controller = new AbortController(); summaryRuns.get(runId)?.abort(); summaryRuns.set(runId, controller);
+    try {
+      const runner = request.agent === 'claude' ? claudeSummaryRunner({ executable: request.executable === undefined ? '' : textArg(request.executable, 4096), runRoot: path.join(app.getPath('userData'), 'claude-summaries') }) : codexSummaryRunner(codex);
+      return { ok: true, text: (await runner({ instructions: SUMMARY_INSTRUCTION, input, ...(model ? { model } : {}), signal: controller.signal })).slice(0, 20_000) };
+    } catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'The summary failed.' }; }
+    finally { if (summaryRuns.get(runId) === controller) summaryRuns.delete(runId); }
+  });
   handle('agent-discovery:cancel', value => { const id = textArg(value, 80); if (agentRun?.id === id) stopAgentRun(); });
   handle('agent-discovery:run', async value => {
     const request = value as AgentDiscoveryRequest;
@@ -308,7 +392,7 @@ app.whenReady().then(async () => {
       };
       const snapshot = await fresh();
       const send = (message: string, kind: ProgressKind = 'status') => { if (!window.isDestroyed() && agentRun?.id === id) window.webContents.send('agent-discovery:progress', { requestId: id, message, kind }); };
-      const host = new AgentToolHost({ documents: snapshot.documents, configuration }, data => new Worker(path.join(__dirname, 'agent-tools-worker.cjs'), { workerData: data }));
+      const host = new AgentToolHost({ documents: analyzedDocuments(snapshot.documents, configuration), configuration, ...(snapshot.idConfiguration?.profiles ? { profiles: snapshot.idConfiguration.profiles } : {}) }, data => new Worker(path.join(__dirname, 'agent-tools-worker.cjs'), { workerData: data }));
       const adapter = request.agent === 'claude' ? new ClaudeDiscoveryAdapter({ executable: request.executable ?? '', runRoot: path.join(app.getPath('userData'), 'claude-discovery') }) : new CodexDiscoveryAdapter(codex);
       run = new DiscoveryRun({ adapter, host, model: request.model, progress: send, limits: runLimits(request.toolCalls),
         proxy: { command: process.execPath, args: [path.join(__dirname, 'specular-mcp.cjs')], env: { ELECTRON_RUN_AS_NODE: '1' } } });
@@ -354,29 +438,38 @@ app.whenReady().then(async () => {
     await Promise.all([...agentChecks.values()].map(check => check.pending));
     closing = true; window.close(); return true;
   });
-  handle('plugin:choose', async () => {
-    const selected = await dialog.showOpenDialog(window, { title: 'Install plugin folder', properties: ['openDirectory'] });
+  /** 97c: abstractions add views; profiles add a discovery contribution. A package with both fits either path. */
+  type PackageKind = 'abstraction' | 'profile';
+  const packageKind = (kind: unknown): PackageKind => {
+    if (kind === undefined || kind === 'abstraction' || kind === 'profile') return kind ?? 'abstraction';
+    throw new Error('Invalid package kind.');
+  };
+  const acceptKind = (kind: PackageKind) => (manifest: PluginManifest) => kind === 'profile'
+    ? manifest.discovery ? undefined : `${manifest.id} has no discovery contribution, so it is not a profile. Install it with Abstractions > Install abstraction folder.`
+    : manifest.views.length ? undefined : `${manifest.id} has no views, so it is not an abstraction. Install it with Project > Install profile folder.`;
+  /** Opens an install dialog where the last picked abstraction was, and remembers the folder that contains the new pick. */
+  async function chooseAbstraction(options: Electron.OpenDialogOptions, kind: PackageKind = 'abstraction') {
+    const start = settings.abstractionFolder();
+    const selected = await dialog.showOpenDialog(window, { ...options, ...(start ? { defaultPath: start } : {}) });
     if (selected.canceled || !selected.filePaths[0]) return null;
-    return installPlugin(selected.filePaths[0]);
-  });
-  async function installPlugin(source: string) {
-    let result = await pluginManager.install(source);
+    await settings.saveAbstractionFolder(path.dirname(selected.filePaths[0]));
+    return installPlugin(selected.filePaths[0], kind);
+  }
+  handle('plugin:choose', rawKind => { const kind = packageKind(rawKind); return chooseAbstraction({ title: `Install ${kind} folder`, properties: ['openDirectory'] }, kind); });
+  async function installPlugin(source: string, kind: PackageKind) {
+    let result = await pluginManager.install(source, false, acceptKind(kind));
     if (!result.installed) {
       const current = pluginManager.list().find(item => item.manifest.id === result.manifest.id)!;
-      const choice = await dialog.showMessageBox(window, { type: 'question', title: 'Replace installed plugin?',
+      const choice = await dialog.showMessageBox(window, { type: 'question', title: `Replace installed ${kind}?`,
         message: `Replace ${result.manifest.id}?`, detail: `Installed: ${current.manifest.version}\nSelected: ${result.manifest.version}\n\nThe existing package remains active if validation or replacement fails.`,
         buttons: ['Cancel', 'Replace'], defaultId: 0, cancelId: 0, noLink: true });
       if (choice.response !== 1) return null;
-      stopPlugin(result.manifest.id); result = await pluginManager.install(source, true);
+      stopPlugin(result.manifest.id); result = await pluginManager.install(source, true, acceptKind(kind));
     }
     return result.manifest;
   }
   const stopPlugin = (id: string) => { pluginRuntimes.get(id)?.runtime.terminate(); pluginRuntimes.delete(id); };
-  handle('plugin:install-archive', async () => {
-    const selected = await dialog.showOpenDialog(window, { title: 'Install plugin archive', properties: ['openFile'], filters: [{ name: 'Plugin archives', extensions: ['zip'] }] });
-    if (selected.canceled || !selected.filePaths[0]) return null;
-    return installPlugin(selected.filePaths[0]);
-  });
+  handle('plugin:install-archive', rawKind => { const kind = packageKind(rawKind); return chooseAbstraction({ title: `Install ${kind} archive`, properties: ['openFile'], filters: [{ name: kind === 'profile' ? 'Profile archives' : 'Abstraction archives', extensions: ['zip'] }] }, kind); });
   handle('plugin:list', () => pluginManager.list());
   handle('plugin:restore-bundled', async id => {
     const key = textArg(id, 128); stopPlugin(key); await pluginManager.restoreBundled(key); return pluginManager.list();
@@ -408,6 +501,33 @@ app.whenReady().then(async () => {
     }
     return (entry.runtime as PluginRuntime).render(request);
   });
+  /**
+   * Increment 97c: each enabled discovery plugin the project does not turn off, in its own sandbox and bounded in time, over the
+   * `markdown@1` model of the selected Markdown. A failing plugin is reported and the others still run; results are reviewed in the renderer.
+   */
+  handle('plugin:discover', async (json, rawIds) => {
+    const input = JSON.parse(textArg(json, INPUT_LIMIT));
+    const documents = input?.documents;
+    if (!input || typeof input.projectId !== 'string' || !input.projectId || input.projectId.length > 128 || !Number.isSafeInteger(input.revision) || input.revision < 0 ||
+      !documents || typeof documents !== 'object' || Array.isArray(documents) || !Object.values(documents).every(text => typeof text === 'string')) throw new Error('Invalid discovery request.');
+    // 97d: the renderer names the profiles that are on for this project, after their applicability and the project's switches.
+    const ids = Array.isArray(rawIds) ? rawIds.filter((id): id is string => typeof id === 'string').slice(0, 64) : [];
+    const plugins = pluginManager.list().filter(item => item.enabled && item.status === 'ready' && item.manifest.discovery && ids.includes(item.manifest.id))
+      .map(item => pluginManager.package(item.manifest.id)).filter(plugin => !!plugin);
+    if (!plugins.length) return { results: [], errors: [] };
+    const model = markdownModel(documents, input.revision);
+    const runs = await Promise.all(plugins.map(async plugin => {
+      const tool = plugin.manifest.discovery!.tool;
+      let reported: string | undefined;
+      const runtime = new PluginRuntime(plugin.manifest, plugin.code, message => { reported ??= message; }, 'discover');
+      try {
+        const result = await runtime.discover({ apiVersion: API_VERSION, requestId: randomUUID(), context: { projectId: input.projectId, revision: input.revision }, models: plugin.manifest.models.includes('markdown@1') ? { markdown: model } : {} });
+        return { id: plugin.manifest.id, tool, suggestions: result.suggestions, ...(result.gaps ? { gaps: result.gaps } : {}) };
+      } catch (error) { return { error: `${tool} (${plugin.manifest.id}): ${reported ?? (error instanceof Error ? error.message : String(error))}` }; }
+      finally { runtime.terminate(); }
+    }));
+    return { results: runs.filter(run => !('error' in run)), errors: runs.flatMap(run => 'error' in run && run.error ? [run.error] : []) };
+  });
   handle('plugin:custom-render', async (id, json, rawBounds) => {
     active();
     const plugin = pluginManager.package(textArg(id, 128));
@@ -424,6 +544,8 @@ app.whenReady().then(async () => {
         if (!window.isDestroyed() && pluginRuntimes.get(plugin.manifest.id)?.runtime === runtime) window.webContents.send('plugin:custom-navigate', { id: plugin.manifest.id, viewId: sourceRequest.viewId, requestId: sourceRequest.requestId, source });
       }, (stateRequest, state) => {
         if (!window.isDestroyed() && pluginRuntimes.get(plugin.manifest.id)?.runtime === runtime) window.webContents.send('plugin:custom-state', { id: plugin.manifest.id, viewId: stateRequest.viewId, requestId: stateRequest.requestId, state });
+      }, (summaryRequest, call) => {
+        if (!window.isDestroyed() && pluginRuntimes.get(plugin.manifest.id)?.runtime === runtime) window.webContents.send('plugin:custom-summary', { id: plugin.manifest.id, viewId: summaryRequest.viewId, requestId: summaryRequest.requestId, call: call.id, op: call.op, subject: call.subject, ...(call.options === undefined ? {} : { options: call.options }) });
       });
       runtime.setObscured(customPluginsObscured);
       entry = { runtime, project: request.context.projectId, custom: true }; pluginRuntimes.set(plugin.manifest.id, entry);
@@ -445,9 +567,9 @@ app.whenReady().then(async () => {
   window.webContents.on('destroyed', stopPlugins);
   window.on('closed', stopPlugins);
   handle('document:read' , file => active().read(textArg(file, 4096)));
-  handle('document:create', async (name): Promise<CreateDocumentResult> => {
-    const filename = textArg(name, 4096);
-    try { return { ok: true, document: await active().createMarkdown(filename) }; }
+  handle('document:create', async (name, folder): Promise<CreateDocumentResult> => {
+    const filename = textArg(name, 4096), destination = folder === undefined ? '' : textArg(folder, 4096);
+    try { return { ok: true, document: await active().createMarkdown(filename, destination) }; }
     catch (error) { return { ok: false, message: error instanceof Error ? error.message : 'Could not create the Markdown file.' }; }
   });
   handle('document:save', (file, text, version, root) => {

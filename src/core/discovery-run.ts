@@ -14,6 +14,11 @@ export interface AdapterRun {
   mcp: McpLaunch; instructions: string; prompt: string; model?: string;
   /** Report a tool the agent used other than the Specular MCP tools; the run stops. */
   violation(message: string): void;
+  /**
+   * Increment 107: report a tool the agent asked for that the session does not offer, such as a Specular tool by its bare name;
+   * the agent client refused it, so nothing ran. The run continues until MAX_REFUSED_TOOLS such calls.
+   */
+  refused(tool: string): void;
   /** Report that the agent finished or failed; without a submission the run fails with the message. */
   ended(message?: string): void;
   /**
@@ -28,8 +33,11 @@ export type ProgressKind = 'status' | 'tool' | 'agent';
 export interface AgentAdapter { readonly name: string; start(run: AdapterRun): Promise<{ stop(): Promise<void> }> }
 /** The evaluated draft of the run with the fewest problems (duplicates plus unresolved references). */
 export interface BestDraft { evaluationId: string; categories: number; duplicates: number; unresolved: number; problems: number }
-export interface DiscoveryRunResult { ok: boolean; message: string; proposal?: AgentProposal; toolCalls: number; /** Recorded for reports (92). */ best?: BestDraft; followUp?: boolean }
-export interface AgentDiscoveryRequest { requestId: string; root: string; documentVersions: Record<string, string>; diskVersion: string; configuration: import('./id-configuration').IdConfiguration; agent: 'codex' | 'claude'; model?: string; /** Claude Code executable from Agent setup; empty searches PATH. */ executable?: string; /** Tool-call limit chosen in Discover IDs (86d); 80 when omitted (92). */ toolCalls?: number }
+export interface DiscoveryRunResult { ok: boolean; message: string; proposal?: AgentProposal; toolCalls: number; /** Recorded for reports (92). */ best?: BestDraft; followUp?: boolean;
+  /** Increment 107: tools the agent asked for that the session does not offer, in order; refused, so they ran nothing and used no budget. */ refusedTools?: string[] }
+/** Increment 107: refused tool requests a run tolerates; the next one stops it, so an agent cannot loop on them without using its budget. */
+export const MAX_REFUSED_TOOLS = 5;
+export interface AgentDiscoveryRequest { requestId: string; root: string; documentVersions: Record<string, string>; diskVersion: string; configuration: import('./id-configuration').IdConfiguration; agent: 'codex' | 'claude'; model?: string; /** Claude Code executable from Agent setup; empty searches PATH. */ executable?: string; /** Tool-call limit chosen in Discover (86d); 80 when omitted (92). */ toolCalls?: number }
 
 export const AGENT_PROMPT = 'Discover this project\'s engineering-record conventions, including how records state their statuses and dates, and submit a measured configuration with submit_proposal.';
 export const agentPrompt = (limits: AgentRunLimits) => `${AGENT_PROMPT} You have ${limits.toolCalls} tool calls.`;
@@ -41,6 +49,7 @@ export class DiscoveryRun {
   private settled = false;
   private best?: BestDraft;
   private followedUp = false;
+  private readonly refusedTools: string[] = [];
   private resolve!: (result: DiscoveryRunResult) => void;
   private readonly done = new Promise<DiscoveryRunResult>(resolve => { this.resolve = resolve; });
   private stopAgent?: () => Promise<void>;
@@ -49,7 +58,8 @@ export class DiscoveryRun {
   private get limits() { return this.options.limits ?? DEFAULT_RUN_LIMITS; }
   private finish(result: Omit<DiscoveryRunResult, 'toolCalls'>) {
     if (this.settled) return;
-    this.settled = true; this.resolve({ ...result, toolCalls: this.calls, ...(this.best ? { best: this.best } : {}), ...(this.followedUp ? { followUp: true } : {}) }); void this.stop();
+    this.settled = true; this.resolve({ ...result, toolCalls: this.calls, ...(this.best ? { best: this.best } : {}), ...(this.followedUp ? { followUp: true } : {}),
+      ...(this.refusedTools.length ? { refusedTools: [...this.refusedTools] } : {}) }); void this.stop();
   }
   private fail(message: string) { this.finish({ ok: false, message: `${message} No configuration was changed.` }); }
   cancel() { this.fail('Discovery cancelled.'); return this.stop(); }
@@ -85,7 +95,7 @@ export class DiscoveryRun {
     if (outcome.proposal && !this.settled) {
       const proposal = outcome.proposal;
       // Answer the agent first, then end its turn.
-      const extra = [proposal.statusRationale !== undefined ? 'statuses' : '', proposal.dateRationale !== undefined ? 'date rules' : ''].filter(Boolean);
+      const extra = [proposal.statusRationale !== undefined ? 'statuses' : '', proposal.dateRationale !== undefined ? 'date rules' : '', proposal.folderRationale !== undefined ? 'folder-derived features or modules' : '', proposal.tagRationale !== undefined ? 'section tags' : ''].filter(Boolean);
       setTimeout(() => this.finish({ ok: true, proposal, message: `The agent proposed ${proposal.configuration.categories.length} categories${extra.length ? ` and ${extra.join(' and ')}` : ''} after ${this.calls} tool calls. Review before adding them to the draft.` }), 0);
     }
     return outcome.result;
@@ -118,6 +128,13 @@ export class DiscoveryRun {
         mcp: { command: proxy.command, args: proxy.args, env: { ...proxy.env, SPECULAR_MCP_PIPE: this.bridge.path, SPECULAR_RUN_TOKEN: this.bridge.token } },
         instructions: AGENT_INSTRUCTIONS + budgetInstructions(this.limits), prompt: agentPrompt(this.limits), ...(this.options.model ? { model: this.options.model } : {}),
         violation: message => this.fail(`Stopped: ${message}`),
+        refused: tool => {
+          if (this.settled) return;
+          this.refusedTools.push(tool);
+          const names = [...new Set(this.refusedTools)].map(name => `"${name}"`).join(', ');
+          if (this.refusedTools.length >= MAX_REFUSED_TOOLS) this.fail(`Stopped: the agent asked ${this.refusedTools.length} times for tools that discovery does not offer (${names}).`);
+          else this.options.progress(`The agent asked for "${tool}", which is not a Specular tool; it was refused and nothing ran (${this.refusedTools.length} of ${MAX_REFUSED_TOOLS - 1} allowed).`);
+        },
         ended: message => {
           if (this.settled) return;
           const best = this.best ? ` Its best evaluated draft was ${this.bestText(this.best)}.` : '';

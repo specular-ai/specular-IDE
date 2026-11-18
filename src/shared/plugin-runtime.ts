@@ -1,9 +1,12 @@
 import { idKey } from '../core/id-identity';
 import { validModulePath, validScopeValue } from '../core/module-configuration';
+import { SECTION_TAG } from '../core/id-configuration';
 import { appearance, validTheme } from './appearance';
-import { API_VERSION, type PluginManifest, type RenderRequest, type RenderResult, type SourceReference } from '../../packages/plugin-api/src/index';
+import { API_VERSION, type DiscoveryRequest, type DiscoveryResult, type PluginManifest, type RenderRequest, type RenderResult, type SourceReference } from '../../packages/plugin-api/src/index';
+import { parseActivity } from './activity-model';
 export type { PluginManifest, RenderRequest, RenderResult };
-export const INPUT_LIMIT = 8 * 1024 * 1024;
+// Increment 95a: 32 MiB (was 8), since every request carries the project and physical models; increment 84 plans the structural fix.
+export const INPUT_LIMIT = 32 * 1024 * 1024;
 export const OUTPUT_LIMIT = 1024 * 1024;
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
 const str = (v: unknown, n = 4096): v is string => typeof v === 'string' && v.length <= n;
@@ -13,16 +16,18 @@ const isoDay = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{
 const relative = (v: unknown): v is string => str(v) && !!v && !v.includes('\\') && !v.includes(':') && !v.includes('\0') && v.split('/').every(p => p !== '' && p !== '.' && p !== '..');
 /** Host requests carry every model so source evidence can always be checked; `forPlugin` strips undeclared ones. */
 export function parseRequest(json: unknown, manifest: PluginManifest): RenderRequest {
-  if (!str(json, INPUT_LIMIT)) throw new Error('Plugin request exceeds 8 MiB.');
+  if (!str(json, INPUT_LIMIT)) throw new Error('Plugin request exceeds 32 MiB.');
   const r = JSON.parse(json);
   if (!object(r) || r.apiVersion !== API_VERSION || !str(r.requestId, 128) || !manifest.views.some(v => v.id === r.viewId) || (r.targetId !== undefined && !str(r.targetId, 16384))) throw new Error('Invalid plugin request.');
   if (r.appearance !== undefined && (!object(r.appearance) || !validTheme(r.appearance.mode) || !object(r.appearance.colors) ||
     !keys(r.appearance, ['mode', 'colors']) || !keys(r.appearance.colors, Object.keys(appearance('dark').colors)) ||
     !Object.keys(appearance('dark').colors).every(key => /^#[0-9a-f]{6}$/i.test(r.appearance.colors[key])))) throw new Error('Invalid plugin appearance.');
-  if (r.customState !== undefined && (manifest.customApi !== 1 || !str(r.customState, 65536))) throw new Error('Invalid custom view state.');
+  if (r.customState !== undefined && (manifest.customApi === undefined || !str(r.customState, 65536))) throw new Error('Invalid custom view state.');
   const c = r.context, m = r.models;
   if (!object(c) || !keys(c, ['projectId', 'revision', 'currentFile']) || !str(c.projectId, 128) || !c.projectId || !integer(c.revision)) throw new Error('Invalid plugin context.');
-  if (!object(m) || !keys(m, ['project', 'physical'])) throw new Error('Invalid plugin models.');
+  // Increment 95: `activity` is present only in requests for plugins that declare `activity@1`.
+  if (!object(m) || !keys(m, ['project', 'physical', 'activity']) || (m.activity !== undefined && !manifest.models.includes('activity@1'))) throw new Error('Invalid plugin models.');
+  const activity = m.activity === undefined ? undefined : parseActivity(m.activity);
   const envelope = (v: any, name: string) => {
     if (!object(v) || v.name !== name || v.version !== 1 || v.revision !== c.revision || typeof v.ready !== 'boolean' || !Array.isArray(v.warnings) || v.warnings.length > 256 || !v.warnings.every((w: unknown) => str(w)) ||
       !object(v.provenance) || !keys(v.provenance, ['extractor', 'extractorVersion', 'configurationRevision']) || !str(v.provenance.extractor, 128) || !v.provenance.extractor || !str(v.provenance.extractorVersion, 64) || !v.provenance.extractorVersion ||
@@ -61,7 +66,15 @@ export function parseRequest(json: unknown, manifest: PluginManifest): RenderReq
   const hex = (v: unknown) => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);
   const colors = (v: any) => v === undefined || (object(v) && keys(v, ['light', 'dark']) && (v.light === undefined || hex(v.light)) && (v.dark === undefined || hex(v.dark)));
   const config = project.configuration;
-  if (!object(config) || !keys(config, ['categories', 'statuses', 'modules', 'features']) ||
+  // 100b: up to 8 named layers over the model's own category keys, each category in at most one.
+  const layerList = (v: any) => {
+    if (v === undefined) return true;
+    if (!Array.isArray(v) || v.length > 8) return false;
+    const known = new Set(Array.isArray(config?.categories) ? config.categories.map((c: any) => c?.key) : []), placed = new Set<string>(), names = new Set<string>();
+    return v.every((layer: any) => object(layer) && keys(layer, ['name', 'categories']) && str(layer.name, 64) && !!layer.name.trim() && !names.has(layer.name) && (names.add(layer.name), true)
+      && Array.isArray(layer.categories) && layer.categories.length > 0 && layer.categories.every((key: any) => typeof key === 'string' && known.has(key) && !placed.has(key) && (placed.add(key), true)));
+  };
+  if (!object(config) || !keys(config, ['categories', 'statuses', 'modules', 'features', 'layers']) || !layerList(config.layers) ||
     !Array.isArray(config.categories) || config.categories.length > 256 || !config.categories.every((v: any) => object(v) && category({ key: v.key, name: v.name, ...(v.role === undefined ? {} : { role: v.role }) }) && keys(v, ['key', 'name', 'role', 'colors']) && colors(v.colors)) ||
     new Set(config.categories.map((v: any) => v.key)).size !== config.categories.length ||
     !Array.isArray(config.statuses) || config.statuses.length > 128 || !config.statuses.every((v: any) => object(v) && keys(v, ['name', 'colors']) && str(v.name, 128) && !!v.name.trim() && colors(v.colors)) ||
@@ -70,7 +83,9 @@ export function parseRequest(json: unknown, manifest: PluginManifest): RenderReq
   const dateRecord = (v: any, rule: string) => object(v) && keys(v, ['value', 'text', 'source', 'rule']) && v.rule === rule && isoDay(v.value) && str(v.text, 512) && !!v.text && range(v.source);
   const statusOccurrence = (v: any) => object(v) && keys(v, ['value', 'name', 'site', 'source', 'date']) && str(v.value) && !!v.value && str(v.name) && !!v.name && (v.site === undefined || ['paragraphs', 'tables', 'headings', 'checkboxes'].includes(v.site)) && range(v.source) &&
     (v.date === undefined || (dateRecord(v.date, 'status-date') && v.date.source.file === v.source.file));
-  const element = (v: any) => object(v) && keys(v, ['key', 'id', 'scope', 'category', 'definitions', 'modules', 'features', 'status']) && str(v.id) && !!v.id && str(v.key, 16384) && v.key === idKey(v as { id: string; scope?: string }) &&
+  // Section tags (96f): distinct tags in the configured format, present only when an ID has some.
+  const tags = (v: any) => v === undefined || (Array.isArray(v) && v.length > 0 && v.length <= 256 && v.every(t => typeof t === 'string' && SECTION_TAG.test(t)) && new Set(v).size === v.length);
+  const element = (v: any) => object(v) && keys(v, ['key', 'id', 'scope', 'category', 'definitions', 'modules', 'features', 'status', 'tags']) && tags(v.tags) && str(v.id) && !!v.id && str(v.key, 16384) && v.key === idKey(v as { id: string; scope?: string }) &&
     (v.scope === undefined || validScopeValue(v.scope)) && (v.category === undefined || category(v.category)) &&
     Array.isArray(v.definitions) && v.definitions.length <= 256 && v.definitions.every((d: any) => range(d) && (v.scope === undefined || !validModulePath(v.scope, 'file') || d.file === v.scope || d.file.startsWith(v.scope + '/'))) &&
     (v.modules === undefined || assignment(v.modules)) && (v.features === undefined || assignment(v.features, 'features')) &&
@@ -108,14 +123,17 @@ export function parseRequest(json: unknown, manifest: PluginManifest): RenderReq
         occurrences: project.occurrences.map((o: any) => ({ ...(o.moduleAssignment === undefined ? {} : { moduleAssignment: projectAssignment(o.moduleAssignment) }), ...(o.category === undefined ? {} : { category: { key: o.category.key, name: o.category.name, ...(o.category.role === undefined ? {} : { role: o.category.role }) } }), ...identityFields(o), id: o.id, kind: o.kind, label: o.label, source: { file: o.source.file, start: o.source.start, end: o.source.end }, ...(o.owner === undefined ? {} : { owner: { ...identityFields(o.owner), id: o.owner.id, source: { file: o.owner.source.file, start: o.owner.source.start, end: o.owner.source.end } } }) })),
         ids: project.ids.map((v: any) => ({ key: v.key, id: v.id, ...(v.scope === undefined ? {} : { scope: v.scope }), ...(v.category === undefined ? {} : { category: category0(v.category) }), definitions: v.definitions.map(range0),
           ...(v.modules === undefined ? {} : { modules: projectAssignment(v.modules) }), ...(v.features === undefined ? {} : { features: projectAssignment(v.features, 'features') }),
-          ...(v.status === undefined ? {} : { status: { state: v.status.state, occurrences: v.status.occurrences.map((o: any) => ({ value: o.value, name: o.name, ...(o.site === undefined ? {} : { site: o.site }), source: range0(o.source), ...(o.date === undefined ? {} : { date: date0(o.date) }) })) } }) })),
+          ...(v.status === undefined ? {} : { status: { state: v.status.state, occurrences: v.status.occurrences.map((o: any) => ({ value: o.value, name: o.name, ...(o.site === undefined ? {} : { site: o.site }), source: range0(o.source), ...(o.date === undefined ? {} : { date: date0(o.date) }) })) } }),
+          ...(v.tags === undefined ? {} : { tags: [...v.tags] as string[] }) })),
         relationships: project.relationships.map((v: any) => ({ from: v.from as string, to: v.to as string, evidence: v.evidence.map(range0), ...(v.deltas ? { deltas: [...v.deltas] } : {}) })), unownedMentions: project.unownedMentions as number,
         events: project.events.map((v: any) => ({ date: date0(v.date), text: v.text as string, source: range0(v.source), mentionedIds: [...v.mentionedIds] as string[], ...(v.owner === undefined ? {} : { owner: v.owner as string }),
           ...(v.site === undefined ? {} : { site: v.site }), ...(v.kind === undefined ? {} : { kind: v.kind }), ...(v.label === undefined ? {} : { label: v.label as string }) })),
         configuration: { categories: config.categories.map((v: any) => ({ ...category0(v), ...colors0(v.colors) })), statuses: config.statuses.map((v: any) => ({ name: v.name, ...colors0(v.colors) })),
-          modules: projectModules(config.modules), features: projectModules(config.features) } },
+          modules: projectModules(config.modules), features: projectModules(config.features),
+          ...(config.layers === undefined ? {} : { layers: config.layers.map((v: any) => ({ name: v.name as string, categories: [...v.categories] as string[] })) }) } },
       physical: { name: 'physical', ...envelopeFields(physical), folders: [...physical.folders] as string[], files: physical.files.map((f: any) => ({ path: f.path as string, markdown: f.markdown as boolean })),
         documents: physical.documents.map((d: any) => ({ file: d.file as string, text: d.text as string })) },
+      ...(activity ? { activity } : {}),
     } };
 }
 /** The copy a plugin receives: only the models its manifest declares. */
@@ -167,4 +185,17 @@ export function parseResult(json: unknown, request: RenderRequest, manifest: Plu
     }
   }
   return r as RenderResult;
+}
+/**
+ * Increment 97c: the shape of a discovery result. Its suggestions are checked against the Markdown by the review's proposal validation,
+ * like any provider's; gaps are notes, at most 16 short texts with examples.
+ */
+export function parseDiscoveryResult(json: unknown, request: DiscoveryRequest): DiscoveryResult {
+  if (!str(json, OUTPUT_LIMIT)) throw new Error('Discovery result exceeds 1 MiB.');
+  const r = JSON.parse(json);
+  if (!object(r) || !keys(r, ['apiVersion', 'requestId', 'suggestions', 'gaps']) || r.apiVersion !== API_VERSION || r.requestId !== request.requestId) throw new Error('Invalid or stale discovery result.');
+  if (!Array.isArray(r.suggestions) || r.suggestions.length > 32 || !r.suggestions.every(object)) throw new Error('A discovery result has at most 32 suggestions.');
+  if (r.gaps !== undefined && (!Array.isArray(r.gaps) || r.gaps.length > 16 || !r.gaps.every((gap: any) => object(gap) && keys(gap, ['text', 'evidence']) && str(gap.text, 2000) && !!gap.text.trim() &&
+    (gap.evidence === undefined || (Array.isArray(gap.evidence) && gap.evidence.length <= 8 && gap.evidence.every(object)))))) throw new Error('A discovery result has at most 16 gaps, each a text of 1-2000 characters with up to 8 examples.');
+  return r as DiscoveryResult;
 }

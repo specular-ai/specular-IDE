@@ -30,10 +30,8 @@ export class TerminalPanel {
     window.addEventListener('specular:appearance', () => { for (const tab of this.tabs.values()) tab.terminal.options.theme = terminalTheme(); });
     this.panel.id = 'terminal-panel'; this.panel.hidden = true; this.panel.setAttribute('aria-labelledby', 'terminal-title');
     this.panel.innerHTML = `<div id="terminal-divider" role="separator" tabindex="0" aria-label="Terminal height" aria-orientation="horizontal" aria-controls="terminal-panel workbench" title="Drag to resize. Up/Down: adjust; Home/End: limits; Enter or double-click: reset."></div>
-      <div class="terminal-heading"><h2 id="terminal-title">Project terminals</h2><span class="terminal-hint" title="Uses your shell and agent settings. Agent paths come from Agent setup or PATH.">Commands can modify files</span><button id="terminal-maximize" class="quiet-button">Maximize</button><button id="terminal-hide" class="quiet-button" title="Hide terminals (Ctrl+Shift+T); sessions keep running">Hide</button></div>
-      <div class="terminal-launch"><span>New terminal</span>${Object.entries(names).map(([kind, name]) => `<button class="button secondary" data-terminal-kind="${kind}">${name}</button>`).join('')}</div>
-      <div id="terminal-tabs" role="tablist" aria-label="Terminal sessions"></div>
-      <div class="terminal-heading"><span id="terminal-scope">Open a project and choose a terminal.</span><button id="terminal-close" class="quiet-button" disabled>Close terminal</button></div>
+      <div class="terminal-heading"><h2 id="terminal-title" title="Uses your shell and agent settings. Agent paths come from Agent setup or PATH. Commands can modify files.">Terminals</h2><div class="terminal-launch" role="group" aria-label="New terminal">${Object.entries(names).map(([kind, name]) => `<button class="button secondary" data-terminal-kind="${kind}" title="New ${name} terminal">${name}</button>`).join('')}</div><span class="terminal-spacer"></span><button id="terminal-maximize" class="quiet-button">Maximize</button><button id="terminal-hide" class="quiet-button" title="Hide terminals (Ctrl+Shift+T); sessions keep running">Hide</button></div>
+      <div class="terminal-sessions" hidden><div id="terminal-tabs" role="tablist" aria-label="Terminal sessions"></div><span id="terminal-scope"></span><button id="terminal-close" class="quiet-button" disabled>Close terminal</button></div>
       <div id="terminal-content"><p id="terminal-empty">Use Codex or Claude here with their native commands and login flows.</p></div>
       <div id="terminal-notice" role="status" aria-live="polite"></div>`;
     document.querySelector('.statusbar')!.before(this.panel);
@@ -137,7 +135,8 @@ export class TerminalPanel {
   private labels() {
     for (const tab of this.tabs.values()) { tab.button.textContent = `${names[tab.info.kind]} · ${tab.info.status}`; tab.button.title = tab.info.root; tab.button.setAttribute('aria-selected', String(tab.info.id === this.active)); }
     const tab = this.tabs.get(this.active ?? '');
-    this.element('terminal-scope').textContent = tab ? `Started in: ${tab.info.root} · ${tab.info.status}${tab.info.exitCode !== undefined ? ` (${tab.info.exitCode})` : ''}` : 'Open a project and choose a terminal.';
+    this.element('terminal-scope').textContent = tab ? `Started in: ${tab.info.root} · ${tab.info.status}${tab.info.exitCode !== undefined ? ` (${tab.info.exitCode})` : ''}` : '';
+    this.panel.querySelector<HTMLElement>('.terminal-sessions')!.hidden = !this.tabs.size;
     this.element('terminal-scope').title = tab?.info.root ?? '';
     this.element<HTMLButtonElement>('terminal-close').disabled = !tab || this.closing;
     this.element('terminal-empty').hidden = this.tabs.size > 0;

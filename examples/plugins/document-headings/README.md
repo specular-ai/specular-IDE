@@ -22,4 +22,4 @@ npm run build
 npm run validate
 ```
 
-In Specular, choose **Project Lens > Install plugin folder...** and select the built directory. The installed package needs only `package.json`, `specular-plugin.json`, and `dist/index.js`.
+In Specular, choose **Abstractions > Install abstraction folder…** and select the built directory. The installed package needs only `package.json`, `specular-plugin.json`, and `dist/index.js`.

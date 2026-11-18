@@ -4,6 +4,8 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { pluginFrame } from './plugin-frame';
+import { openOverview } from './menu-action';
+import { seedLegacyConfiguration } from './legacy-configuration';
 const plugin = () => pluginFrame(app);
 let app: ElectronApplication, page: Page, project: string, root: string;
 const requirements = '# REQ-001 - First requirement\nREQ-002 and REQ-001.\n# REQ-002 - Second requirement\nNo outgoing links.\n# REQ-003 - Isolated\nNo links.\n';
@@ -14,11 +16,12 @@ async function launch(extra: Record<string, string> = {}) {
   for (const [file, text] of Object.entries({ 'requirements.md': requirements, 'design.md': design.replace(/\n/g, '\r\n'), 'plan.md': '# PH-001\nDD-001 and Q-404\n', 'notes.md': 'Unowned REQ-999\n# Q-001\nAn open question.\n', ...extra })) await writeFile(path.join(project, file), text);
   const env = Object.fromEntries(Object.entries(process.env).filter(([k, v]) => k !== 'ELECTRON_RUN_AS_NODE' && v !== undefined)) as Record<string, string>;
   const args = ['--project=' + project];
+  await seedLegacyConfiguration(project);
   app = await electron.launch({ ...(process.env.SPECULAR_TEST_PACKAGED ? { executablePath: path.resolve('out', `Specular-${process.platform}-${process.arch}`, 'Specular.exe'), args } : { args: ['.', ...args] }), env: { ...env, SPECULAR_USER_DATA: path.join(root, 'user-data') } });
   page = await app.firstWindow(); await failAutosave(app); await expect(page.locator('#lens-results .lens-card').first()).toBeVisible();
 }
 async function overview() {
-  await page.getByRole('button', { name: 'Dependency overview', exact: true }).click();
+  await openOverview(page);
   await expect((await plugin()).locator('#dependency-overview')).toBeVisible(); await expect((await plugin()).locator('.dependency-summary')).toBeVisible();
 }
 const inspect = async (id: string) => { await (await plugin()).getByRole('button', { name: 'Fit all', exact: true }).click(); await (await plugin()).getByRole('button', { name: `Inspect ${id}`, exact: true }).click(); };
@@ -41,7 +44,7 @@ test('overview invocation shows the complete visual graph, filters preserve cros
   await expect((await plugin()).locator('#dependency-evidence')).toContainText('DD-001 references REQ-001');
   await (await plugin()).locator('.dependency-evidence-source').click(); await expect(page.locator('#document-path')).toHaveText('design.md');
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('REQ-001');
-  await page.getByRole('tab', { name: 'Relationships', exact: true }).click();
+  await page.getByRole('tab', { name: 'Project map', exact: true }).click();
   await expect((await plugin()).locator('#dependency-overview')).toBeVisible(); await expect((await plugin()).locator('#dependency-file')).toHaveValue('requirements.md'); await expect((await plugin()).locator('#dependency-kind')).toHaveValue('REQ');
   await expect((await plugin()).locator('#dependency-evidence')).toContainText('DD-001 references REQ-001');
   await page.getByRole('button', { name: 'Focus', exact: true }).click(); await expect((await plugin()).locator('#map-focus')).toBeVisible();
@@ -79,7 +82,7 @@ test('unsaved edits invalidate old evidence and refresh the complete graph and p
   await page.getByRole('tab', { name: 'requirements.md', exact: true }).click();
   await page.locator('#editor .cm-content').fill(requirements.replace('REQ-002 and REQ-001.', 'Q-002.'));
   await expect.poll(() => app.context().pages().filter(p => p.url().includes('/custom.html')).length).toBe(0);
-  await page.getByRole('tab', { name: 'Relationships', exact: true }).click(); await expect((await plugin()).locator('.dependency-summary')).toContainText('9 IDs / 7 directed connections');
+  await page.getByRole('tab', { name: 'Project map', exact: true }).click(); await expect((await plugin()).locator('.dependency-summary')).toContainText('9 IDs / 7 directed connections');
   await expect((await plugin()).locator('.dependency-edge[data-edge="REQ-001>REQ-002"]')).toHaveCount(0);
   await (await inspector()).locator('[data-edge="REQ-001>Q-002"]').click(); await (await plugin()).locator('.dependency-evidence-source').click();
   await expect(page.locator('#dirty-indicator')).toHaveText(/Pending changes|Save failed|Conflict/); expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Q-002');
@@ -95,12 +98,12 @@ test('large graphs render every node and edge, retain camera state, support sear
   const stage = (await plugin()).locator('.dependency-graph-stage'); await stage.focus(); const zoomed = await transform(); await stage.press('ArrowRight'); expect(await transform()).not.toBe(zoomed);
   await stage.scrollIntoViewIfNeeded(); const box = (await stage.boundingBox())!;
   const beforeDrag = await transform(); await (await plugin()).page().mouse.move(box.x + 5, box.y + 5); await (await plugin()).page().mouse.down(); await (await plugin()).page().mouse.move(box.x + 35, box.y + 25); await (await plugin()).page().mouse.up(); expect(await transform()).not.toBe(beforeDrag);
-  const moved = await transform(); await page.getByRole('tab', { name: 'design.md', exact: true }).click(); await page.getByRole('tab', { name: 'Relationships', exact: true }).click(); expect(await transform()).toBe(moved);
+  const moved = await transform(); await page.getByRole('tab', { name: 'design.md', exact: true }).click(); await page.getByRole('tab', { name: 'Project map', exact: true }).click(); expect(await transform()).toBe(moved);
   await expect((await plugin()).locator('.dependency-graph-node')).toHaveCount(53); await expect((await plugin()).locator('.dependency-graph-edge')).toHaveCount(53);
   await (await plugin()).locator('#dependency-search').fill('AT-144'); await expect((await plugin()).locator('.dependency-summary')).toContainText('Filters match 1 IDs and 1 incident connections'); await inspect('AT-144');
-  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'requirements.md'), '# REQ-999\nOther project.\n');
+  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'requirements.md'), '# REQ-999\nOther project.\n'); await seedLegacyConfiguration(other);
   await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other);
-  await page.locator('#open-project').click(); await expect(page.locator('#project-heading')).toHaveText('other'); await expect(page.getByRole('tab', { name: 'Relationships', exact: true })).toHaveCount(0);
+  await page.locator('#open-project').click(); await expect(page.locator('#project-heading')).toHaveText('other'); await expect(page.getByRole('tab', { name: 'Project map', exact: true })).toHaveCount(0);
   await overview(); await expect((await plugin()).locator('.dependency-summary')).toContainText('1 IDs / 0 directed connections'); await expect((await plugin()).locator('#dependency-search')).toHaveValue('');
 });
 
@@ -108,7 +111,7 @@ test('real project overview fits the minimum window and external edits remove se
   test.skip(!existsSync('plan.md'), 'The development documents are not part of the public distribution.');
   await launch({ 'requirements.md': await readFile('requirements.md', 'utf8'), 'design.md': await readFile('design.md', 'utf8'), 'plan.md': await readFile('plan.md', 'utf8') });
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1120, 720)); await overview();
-  expect(await page.locator('[aria-label="Relationships view"]').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+  expect(await page.locator('[aria-label="Project map view"]').evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
   await (await plugin()).locator('.dependency-graph-stage').scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'test-results/dependency-overview-minimum.png' });
   await (await plugin()).locator('#dependency-search').fill('DD-031'); await inspect('DD-031');
@@ -146,7 +149,7 @@ test('overview includes authored tasks, direct requirement and task links, and u
   await expect((await plugin()).locator('#dependency-evidence')).toContainText('TASK-001 references REQ-001');
   await (await plugin()).locator('.dependency-evidence-source').click();
   await expect(page.locator('#document-path')).toHaveText('tasks.md');
-  await page.getByRole('tab', { name: 'Relationships', exact: true }).click(); await inspect('TASK-003');
+  await page.getByRole('tab', { name: 'Project map', exact: true }).click(); await inspect('TASK-003');
   await expect(await inspector()).toContainText('Incoming (0)'); await expect(await inspector()).toContainText('Outgoing (0)');
 });
 
@@ -156,7 +159,7 @@ test('registered view modes preserve camera on close/reopen and source navigatio
   await overview(); await inspect('REQ-001');
   await (await plugin()).getByRole('button', { name: 'Zoom in', exact: true }).click();
   const camera = await (await plugin()).locator('.dependency-graph-stage svg > g').getAttribute('transform');
-  await page.getByRole('button', { name: 'Close Relationships', exact: true }).click();
+  await page.getByRole('button', { name: 'Close Project map', exact: true }).click();
   await overview();
   await expect((await plugin()).locator('.dependency-graph-stage svg > g')).toHaveAttribute('transform', camera!);
   await expect(await inspector()).toContainText('REQ-001');
@@ -164,7 +167,7 @@ test('registered view modes preserve camera on close/reopen and source navigatio
   await (await plugin()).locator('.dependency-evidence-source').click();
   await expect(page.locator('#document-path')).toHaveText('design.md'); await expect(page.locator('#source-panel')).toBeVisible();
   expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('REQ-001');
-  await page.getByRole('tab', { name: 'Relationships', exact: true }).click();
+  await page.getByRole('tab', { name: 'Project map', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Overview', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect((await plugin()).locator('#dependency-evidence')).toContainText('DD-001 references REQ-001');
 });
@@ -187,7 +190,7 @@ test('opening a registered mode invalidates a pending source read', async () => 
   await app.evaluate(() => (globalThis as any).releaseViewRead());
   // Flush the completed IPC before checking that its old destination did not become active.
   await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 100)));
-  await expect(page.locator('[aria-label="Relationships view"]')).toBeVisible();
+  await expect(page.locator('[aria-label="Project map view"]')).toBeVisible();
   await expect((await plugin()).locator('#map-focus')).toBeVisible();
   await expect(page.getByRole('tab', { name: 'late.md', exact: true })).toHaveCount(0);
 });

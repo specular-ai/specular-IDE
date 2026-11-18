@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pluginFrame } from './plugin-frame';
 import type { IdConfiguration } from '../../src/core/id-configuration';
+import { openOverview } from './menu-action';
 let app: ElectronApplication, page: Page, root: string, project: string;
 const configuration: IdConfiguration = { version: 1, categories: [
   { key: 'needs', name: 'Business needs', role: 'requirement' }, { key: 'architecture', name: 'Architecture', role: 'design' },
@@ -57,7 +58,7 @@ test('custom categories expose both hops and navigate to exact cross-file eviden
   await frame.page().screenshot({ path: 'test-results/configured-relationships.png' });
 });
 test('Overview groups multiple prefixes by category and retains role-free IDs', async () => {
-  await page.locator('#dependency-overview-open').click(); const frame = await pluginFrame(app);
+  await openOverview(page); const frame = await pluginFrame(app);
   await expect(frame.locator('#dependency-overview')).toBeVisible();
   await frame.locator('#dependency-kind').selectOption('needs');
   await expect(frame.locator('#dependency-kind option:checked')).toHaveText('Business needs');
@@ -71,7 +72,7 @@ test('role changes refresh open Focus and reject a previously captured source ac
   await frame.getByRole('button', { name: 'Open DEC-1 definition', exact: true }).evaluate(button => { (window as any).oldSource = button; });
   const changed = structuredClone(configuration); delete changed.categories[0].role;
   await writeFile(path.join(project, '.specular/project.json'), JSON.stringify(changed)); await page.locator('#refresh').click();
-  await expect(frame.locator('.map-status')).toContainText('Choose an ID with a requirement, design or task role');
+  await expect(frame.locator('.map-status')).toContainText('Choose an ID whose category is in a relationship layer');
   await frame.evaluate(() => (window as any).oldSource.click());
   await expect(page.locator('#document-path')).toHaveText('a.md');
   await expect(frame.locator('#relationship-focus')).toBeVisible();

@@ -7,6 +7,7 @@ import { styleCategoryCard } from './category-colors';
 import { moduleBadges } from './module-card';
 import { statusSiteGroups } from './status-sites';
 import { DEFAULT_STATUS_SITES } from '../core/status-sites';
+import { explain } from './hover-hint';
 
 export function statusBadge(value: string, palettes: StatusPalette[], conflict = false) {
   const badge = document.createElement('span'); badge.className = 'status-badge'; badge.textContent = conflict ? 'Status conflict' : value;
@@ -73,7 +74,7 @@ export class StatusEditor {
     mode.value = entry.statusSites ? 'override' : 'inherit'; label.append(mode);
     const settings = entry.statusSites ?? structuredClone(this.draft().statusSites ?? DEFAULT_STATUS_SITES);
     const controls = document.createElement('div'); controls.className = 'config-status-local-site-controls'; controls.hidden = !entry.statusSites;
-    const renderControls = () => controls.replaceChildren(...statusSiteGroups(settings, () => { entry.statusSites = structuredClone(settings); this.changed(); }));
+    const renderControls = () => controls.replaceChildren(...statusSiteGroups(settings, () => { entry.statusSites = structuredClone(settings); this.changed(); }, `status:${entry.name}`));
     renderControls();
     const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'quiet-button'; reset.textContent = 'Restore inheritance';
     reset.onclick = () => { delete entry.statusSites; mode.value = 'inherit'; controls.hidden = true; this.changed(); };
@@ -85,11 +86,10 @@ export class StatusEditor {
       } else { delete entry.statusSites; controls.hidden = true; }
       this.changed();
     };
-    section.append(summary, hint, label, controls, reset); return section;
+    explain(summary, hint.textContent!);
+    section.append(summary, label, controls, reset); return section;
   }  render() {
     const config = this.draft();
-    const summary = document.createElement('h3'); summary.textContent = 'Authored statuses';
-    const hint = document.createElement('p'); hint.className = 'config-hint'; hint.textContent = 'Scan authored values using Definition and status sites. Add future values and choose their colors. Labels describe authored statements, not verified implementation.';
     const button = (name: string, action: () => void) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'quiet-button'; b.textContent = name; b.onclick = action; return b; };
     const list = document.createElement('div'); list.className = 'status-list';
     for (const entry of config.statuses ?? []) {
@@ -158,6 +158,7 @@ export class StatusEditor {
     removalHint.textContent = 'Delete all statuses removes configured names, matching rules, and colors. Authored Markdown stays unchanged; unconfigured values use neutral badges.';
     removeAll.setAttribute('aria-describedby', removalHint.id);
     if (!config.statuses?.length) list.textContent = 'No statuses configured. Add a status or Rescan statuses to discover authored values.';
-    this.root.replaceChildren(summary, hint, button('Rescan statuses', this.scan), add, removeAll, removalHint, this.message, this.foundDetails, list);
+    explain(removeAll, removalHint.textContent!); removalHint.hidden = true;
+    this.root.replaceChildren(button('Rescan statuses', this.scan), add, removeAll, removalHint, this.message, this.foundDetails, list);
   }
 }

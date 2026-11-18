@@ -3,6 +3,9 @@ import { FolderGeneratorEditor } from './folder-generators';
 import { generatedFolderHistory, validateFolderGenerators, type GeneratorTarget } from '../core/folder-generators';
 import { idKey, idLabel } from '../core/id-identity';
 import { DefinitionSitesEditor, categoryDefinitionSites, fileCoverage } from './definition-sites';
+import { ExcludedPathsEditor } from './excluded-paths';
+import { layersWithout } from '../core/layers';
+import { LayersEditor } from './layers-editor';
 import { fileInScopes, validateIdScopes } from '../core/id-scopes';
 import { IdDiscoveryEditor } from './id-discovery';
 import { configurationEntry, rememberConfigurationEntries } from './configuration-entry';
@@ -12,10 +15,11 @@ import { ModuleConfigurationEditor } from './module-configuration';
 import { DateRulesEditor } from './date-rules';
 import { categoryAccent, validCategoryColor } from '../shared/category-colors';
 import { styleCategoryCard } from './category-colors';
-import { DEFAULT_LIST_ITEM, LEGACY_ID_CONFIGURATION, validateIdConfiguration, ruleRegex, type IdCategory, type IdRule, type IdConfiguration, type IdConfigurationState } from '../core/id-configuration';
+import { DEFAULT_LIST_ITEM, DEFAULT_NUMBERED_ITEM_ID, LEGACY_ID_CONFIGURATION, MAX_SECTION_TAGS, validateIdConfiguration, ruleRegex, type IdCategory, type IdRule, type IdConfiguration, type IdConfigurationState } from '../core/id-configuration';
 import { DEFAULT_STATUS_SITES } from '../core/status-sites';
 import { IndexWorker, type IndexResponse } from '../core/index-worker';
 import type { Finding, Occurrence, ProjectIndex, SourceLocation } from '../shared/types';
+import { explain } from './hover-hint';
 
 export interface ConfigurationContext {
   projectId: string; root: string; documents: Record<string, string>; documentVersions: Record<string, string>;
@@ -37,11 +41,22 @@ export function sameDocuments(a: Record<string, string>, b: Record<string, strin
 }
 const copy = <T>(value: T): T => structuredClone(value);
 const CONFIGURATION_TABS = [
-  ['discovery', 'Discover IDs'], ['categories', 'Categories'],
-  ['definition-sites', 'Definition and status sites'], ['modules', 'Application modules'], ['features', 'Application features'], ['statuses', 'Authored statuses'], ['dates', 'Dates'],
+  ['discovery', 'Discover'], ['categories', 'Categories'],
+  ['definition-sites', 'Definition and status sites'], ['modules', 'Application modules'], ['features', 'Application features'], ['statuses', 'Authored statuses'], ['dates', 'Dates'], ['excluded', 'Excluded paths'],
 ] as const;
 type ConfigurationTab = typeof CONFIGURATION_TABS[number][0];
 
+/** Each tab's purpose, shown on hover over the tab. */
+const TAB_HINTS: Record<ConfigurationTab, string> = {
+  discovery: 'Find categories and ID rules in the project Markdown with heuristics or an agent, review the suggestions, and add them to the draft.',
+  categories: 'Define named categories, such as requirements or design decisions, and the ID formats that recognize their IDs. Each category can also have its own definition sites, statuses, and colors. Changes stay in this draft until you preview and apply them.',
+  'definition-sites': 'Choose where recognized IDs define elements, other mentions remaining references, and where their authored statuses are read. Categories without an override inherit these project settings. Changes stay in this draft until you preview and apply them.',
+  modules: 'Define application modules, such as GUI or backend, independently of categories. File rules assign the IDs defined in a file or folder; exact-ID overrides replace them, and an empty override means explicitly unassigned. Changes stay in this draft until you preview and apply them.',
+  features: 'Define application features, independently of modules and categories. File rules assign the IDs defined in a file or folder; exact-ID overrides replace them, and an empty override means explicitly unassigned. Changes stay in this draft until you preview and apply them.',
+  statuses: 'Name the authored status values and choose their colors. Rescan statuses finds the values written at the definition and status sites; you can also add future values. Labels describe authored statements, not verified implementation. Changes stay in this draft until you preview and apply them.',
+  dates: 'Define where dates are written in Markdown and what they mean: inside status values, in dated list entries, in headings, and in labelled fields such as **Created**: 2025-12-12. Milestones mark something happening; Last updated snapshots are overwritten on every edit. Preview matches shows which dates each rule finds. Changes stay in this draft until you preview and apply them.',
+  excluded: 'Leave Markdown under some paths out of the analysis. Changes stay in this draft until you preview and apply them.',
+};
 export class ProjectConfigurationDialog {
   private dialog = document.createElement('dialog');
   private loaded?: ConfigurationContext;
@@ -66,6 +81,8 @@ export class ProjectConfigurationDialog {
     source: (location, text, valid) => { this.suspended = true; this.dialog.close(); void this.host.source(location, text, valid).catch(error => { this.show(); this.error(String(error)); }); },
   });
   private definitionSitesEditor = new DefinitionSitesEditor(() => this.draft, () => this.changed());
+  private layersEditor = new LayersEditor(() => this.draft, () => this.changed());
+  private excludedPathsEditor = new ExcludedPathsEditor(() => this.draft, () => Object.keys(this.current()?.documents ?? {}), () => this.changed());
   private statusEditor = new StatusEditor(() => this.draft, () => this.changed(), () => { this.runPreview(true); });
   private featureEditor = new FeatureConfigurationEditor(() => this.draft, () => this.changed());
   private moduleEditor = new ModuleConfigurationEditor(() => this.draft, () => this.changed());
@@ -92,14 +109,13 @@ export class ProjectConfigurationDialog {
         ${CONFIGURATION_TABS.map(([id, label]) => `<button type="button" id="config-tab-${id}" role="tab" aria-controls="config-panel-${id}" aria-selected="false" tabindex="-1">${label}</button>`).join('')}
       </div>
       <div class="config-body">
-      <p class="config-intro">Define named categories and the ID formats that belong to them. Changes stay in this draft until you preview and apply them.</p>
       <p id="config-warning" class="config-warning" hidden></p>
       <fieldset id="config-fields"><div id="config-panel-discovery"></div>
-        <section id="config-panel-categories"><div class="config-section-heading config-category-heading"><h3>Categories</h3><div class="config-category-actions"><button type="button" id="config-add-category" class="quiet-button">Add category</button><button type="button" id="config-delete-categories" class="quiet-button">Delete all categories</button></div></div>
+        <section id="config-panel-categories"><div class="config-section-heading config-category-heading"><div class="config-category-actions"><button type="button" id="config-add-category" class="quiet-button">Add category</button><button type="button" id="config-delete-categories" class="quiet-button">Delete all categories</button></div></div>
           <p id="config-categories-empty" class="config-hint" hidden>No categories defined. Add a category to configure ID recognition.</p>
-          <div id="config-categories" class="config-list"></div></section>
-      <div id="config-panel-definition-sites"></div><div id="config-panel-modules"></div><div id="config-panel-features"></div><div id="config-panel-statuses"></div><div id="config-panel-dates"></div></fieldset>
-      <section class="config-preview" aria-labelledby="config-preview-title"><div class="config-section-heading"><h3 id="config-preview-title">Recognition preview</h3></div>
+          <div id="config-categories" class="config-list"></div><div id="config-layers-host"></div></section>
+      <div id="config-panel-definition-sites"></div><div id="config-panel-modules"></div><div id="config-panel-features"></div><div id="config-panel-statuses"></div><div id="config-panel-dates"></div><div id="config-panel-excluded"></div></fieldset>
+      <section class="config-preview" aria-labelledby="config-preview-title"><div class="config-section-heading"><h3 id="config-preview-title" class="has-hint" title="Preview matches applies the draft to the project Markdown without saving, listing definitions, references, issues, and status changes.">Recognition preview</h3></div>
         <p id="config-status" role="status" aria-live="polite">Preview the draft to see its effect on project Markdown.</p>
         <p id="config-error" class="coral" role="alert" hidden></p>
         <p id="config-summary"></p><p id="config-module-summary"></p><p id="config-changes"></p>
@@ -108,12 +124,13 @@ export class ProjectConfigurationDialog {
       </section>
       </div>
       <footer class="dialog-actions"><button type="button" id="config-reset" class="quiet-button">Reset draft to legacy defaults</button><button type="button" id="config-reload" class="quiet-button">Reload configuration (discard draft)</button><span class="config-spacer"></span><button type="button" id="config-cancel" class="button secondary">Cancel</button><button type="button" id="config-preview" class="button secondary">Preview matches</button><button type="button" id="config-apply" class="button primary" disabled>Apply</button></footer>`;
-    document.body.append(this.dialog); this.el('#config-panel-features').append(this.featureEditor.root); this.el('#config-panel-discovery').append(this.discovery.root); this.el('#config-panel-definition-sites').append(this.definitionSitesEditor.root); this.el('#config-panel-modules').append(this.moduleEditor.root); this.el('#config-panel-statuses').append(this.statusEditor.root); this.el('#config-panel-dates').append(this.dateEditor.root);
+    document.body.append(this.dialog); this.el('#config-panel-features').append(this.featureEditor.root); this.el('#config-panel-discovery').append(this.discovery.root); this.el('#config-panel-definition-sites').append(this.definitionSitesEditor.root); this.el('#config-panel-excluded').append(this.excludedPathsEditor.root); this.el('#config-layers-host').append(this.layersEditor.root); this.el('#config-panel-modules').append(this.moduleEditor.root); this.el('#config-panel-statuses').append(this.statusEditor.root); this.el('#config-panel-dates').append(this.dateEditor.root);
     for (const target of ['features', 'modules'] as const) this.el(`#config-panel-${target}`).append(this.folderEditors[target].root);
     for (const [index, [id]] of CONFIGURATION_TABS.entries()) {
       const tab = this.el<HTMLButtonElement>(`#config-tab-${id}`), panel = this.el(`#config-panel-${id}`);
       panel.setAttribute('role', 'tabpanel'); panel.setAttribute('aria-labelledby', tab.id); panel.tabIndex = 0;
       tab.onclick = () => this.selectTab(id);
+      explain(tab, TAB_HINTS[id]);
       tab.onkeydown = event => {
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? CONFIGURATION_TABS.length - 1
           : event.key === 'ArrowRight' ? (index + 1) % CONFIGURATION_TABS.length
@@ -145,10 +162,6 @@ export class ProjectConfigurationDialog {
   }
   private el<T extends HTMLElement = HTMLElement>(selector: string) { return this.dialog.querySelector<T>(selector)!; }
   private selectTab(selected: ConfigurationTab, focus = false) {
-    this.el('.config-intro').hidden = selected === 'discovery';
-    const subject = selected === 'features' ? 'application features' : selected === 'modules' ? 'application modules' : 'categories';
-    this.el('.config-intro').textContent = selected === 'dates' ? 'Define where dates are written in Markdown and what they mean. Changes stay in this draft until you preview and apply them.'
-      : `Define named ${subject} and the ID formats that belong to them. Changes stay in this draft until you preview and apply them.`;
     for (const [id] of CONFIGURATION_TABS) {
       const active = id === selected, tab = this.el<HTMLButtonElement>(`#config-tab-${id}`);
       tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1;
@@ -253,6 +266,9 @@ export class ProjectConfigurationDialog {
     if (this.draft.featureOverrides) this.draft.featureOverrides = this.draft.featureOverrides.filter(override => !overrideIds.includes(idKey(override)));
     this.draft.categories = this.draft.categories.filter(category => !keys.has(category.key));
     this.draft.rules = this.draft.rules.filter(rule => !keys.has(rule.category));
+    // 100b: removed categories leave their layers; an emptied layer goes, and with no layers left the roles decide again.
+    const layers = layersWithout(this.draft.layers, keys);
+    if (layers) this.draft.layers = layers; else delete this.draft.layers;
     if (this.draft.moduleOverrides) {
       const removed = new Set(overrideIds);
       this.draft.moduleOverrides = this.draft.moduleOverrides.filter(override => !removed.has(idKey(override)));
@@ -295,7 +311,7 @@ export class ProjectConfigurationDialog {
     const coverage = document.createElement('p'); coverage.className = 'config-hint config-scope-coverage';
     const count = () => { coverage.textContent = category.onlyInScopes ? fileCoverage(Object.keys(this.current()?.documents ?? {}), file => fileInScopes(file, validateIdScopes(category.idScopes ?? []))) : 'Rules match in every file; files outside the patterns are project-wide.'; };
     section.addEventListener('input', count); section.addEventListener('change', count);
-    render(); count(); section.append(hint, list, onlyLabel, coverage); return section;
+    render(); count(); explain(section.querySelector<HTMLElement>('summary > span')!, hint.textContent!); section.append(list, onlyLabel, coverage); return section;
   }
   private renderFields() {
     this.dialog.querySelectorAll<HTMLDetailsElement>('.config-category-section').forEach(section => {
@@ -303,7 +319,7 @@ export class ProjectConfigurationDialog {
       if (category) this.categorySections.set(category, { ...this.categorySections.get(category), [section.dataset.section!]: section.open });
     });
     rememberConfigurationEntries(this.el('#config-categories'));
-    this.definitionSitesEditor.render(); this.moduleEditor.render(); this.featureEditor.render(); this.statusEditor.render(); this.dateEditor.render();
+    this.definitionSitesEditor.render(); this.excludedPathsEditor.render(); this.layersEditor.render(); this.moduleEditor.render(); this.featureEditor.render(); this.statusEditor.render(); this.dateEditor.render();
     for (const editor of Object.values(this.folderEditors)) editor.render();
     this.el('#config-categories-empty').hidden = !!this.draft.categories.length;
     this.el('#config-categories').replaceChildren(...this.draft.categories.map((category, i) => {
@@ -314,14 +330,63 @@ export class ProjectConfigurationDialog {
         this.field('Parent category (optional)', category.parent ?? '', value => { if (value) category.parent = value; else delete category.parent; },
           [['', 'None'], ...this.draft.categories.filter(other => other.key !== category.key).map((other, n) => [other.key, other.name || `Category ${n + 1}`] as [string, string])]),
         this.field('Derive elements from files (optional)', category.derive?.pattern ?? '', value => { if (value.trim()) category.derive = { pattern: value.trim() }; else delete category.derive; }, undefined, 4096),
-        this.changeControls(category),
-        this.remove(`Remove category ${i + 1}`, () => this.removeCategories(new Set([category.key])), 'Remove category'), this.categoryRules(category, i), this.categoryScopes(category), categoryDefinitionSites(category, () => this.draft, () => this.changed(), () => Object.keys(this.current()?.documents ?? {})), this.categoryStatusSites(category), this.colorControls(category));
-      return configurationEntry(category, row, () => `${i + 1}. ${category.name || 'New category'}`, !category.name);
+        this.changeControls(category), this.numberedItemsControls(category), this.sectionTagControls(category),
+        this.categoryRules(category, i), this.categoryScopes(category), categoryDefinitionSites(category, () => this.draft, () => this.changed(), () => Object.keys(this.current()?.documents ?? {})), this.categoryStatusSites(category), this.colorControls(category));
+      return configurationEntry(category, row, () => `${i + 1}. ${category.name || 'New category'}`, !category.name,
+        this.remove(`Delete category ${i + 1}`, () => this.removeCategories(new Set([category.key])), 'Delete'));
     }));
+  }
+  /** Increment 96d: elements numbered by their position in ordered lists inside a parent element, such as acceptance criteria. */
+  private numberedItemsControls(category: IdCategory) {
+    const section = document.createElement('details'); section.className = 'config-category-section config-category-numbered';
+    const summary = document.createElement('summary'); summary.textContent = 'Numbered list items';
+    const hint = document.createElement('p'); hint.className = 'config-hint';
+    hint.textContent = 'Each item of an ordered list inside an element of the parent category, under the section heading when one is given, defines an element numbered by its position: {parent} is the parent\'s number and {item} the position, so the second acceptance criterion of Requirement 3 is Criterion 3.2.';
+    const options = document.createElement('div'); options.className = 'config-category-numbered-options'; options.hidden = !category.numberedItems;
+    options.append(
+      this.field('Section heading (optional)', category.numberedItems?.section ?? '', value => { if (!category.numberedItems) return; if (value.trim()) category.numberedItems.section = value.trim(); else delete category.numberedItems.section; }),
+      this.field('Element ID template', category.numberedItems?.id ?? DEFAULT_NUMBERED_ITEM_ID, value => { if (category.numberedItems) category.numberedItems.id = value.trim(); }));
+    const parent = this.field('Parent category of numbered items', category.numberedItems?.parent ?? '', value => {
+      if (value) category.numberedItems = { ...(category.numberedItems ?? { id: DEFAULT_NUMBERED_ITEM_ID }), parent: value }; else delete category.numberedItems;
+      options.hidden = !category.numberedItems;
+    }, [['', 'None'], ...this.draft.categories.filter(other => other.key !== category.key).map((other, n) => [other.key, other.name || `Category ${n + 1}`] as [string, string])]);
+    explain(summary, hint.textContent!); section.append(summary, parent, options); section.open = !!category.numberedItems;
+    return section;
+  }
+  /** Increment 96f: tags for definitions under enclosing headings, such as the behaviour sections of Kiro bugfix specifications. */
+  private sectionTagControls(category: IdCategory) {
+    const section = this.categorySection(category, 'tags', 'Section tags');
+    const hint = document.createElement('p'); hint.className = 'config-hint';
+    hint.textContent = 'Definitions of this category under an enclosing heading with this text, at any level above them, get the tag.';
+    const list = document.createElement('div'); list.className = 'config-section-tag-list';
+    const add = document.createElement('button'); add.type = 'button'; add.className = 'quiet-button config-add-section-tag'; add.textContent = 'Add section tag';
+    const render = () => {
+      list.replaceChildren(...(category.sectionTags ?? []).map((entry, i) => {
+        const row = document.createElement('div'); row.className = 'config-section-tag';
+        // 96g: a row matches a heading text or a pattern; switching keeps the typed value.
+        const kind = this.field('Match', entry.pattern !== undefined ? 'pattern' : 'heading', value => {
+          const text = entry.pattern ?? entry.heading ?? '';
+          delete entry.heading; delete entry.pattern;
+          if (value === 'pattern') entry.pattern = text; else entry.heading = text;
+          render();
+        }, [['heading', 'Heading text'], ['pattern', 'Pattern']]);
+        const matched = entry.pattern !== undefined
+          ? this.field('Pattern', entry.pattern, value => { entry.pattern = value; }, undefined, 512)
+          : this.field('Heading text', entry.heading ?? '', value => { entry.heading = value; });
+        row.append(kind, matched,
+          this.field('Tag', entry.tag, value => { entry.tag = value.trim(); }, undefined, 128),
+          this.remove('Remove section tag ' + (i + 1), () => { category.sectionTags!.splice(i, 1); if (!category.sectionTags!.length) delete category.sectionTags; render(); this.changed(); }, 'Remove section tag'));
+        return row;
+      }));
+      add.disabled = (category.sectionTags?.length ?? 0) >= MAX_SECTION_TAGS;
+    };
+    add.onclick = event => { event.preventDefault(); event.stopPropagation(); section.open = true; (category.sectionTags ??= []).push({ heading: '', tag: '' }); render(); this.changed(); list.querySelector<HTMLInputElement>('.config-section-tag:last-child input')?.focus(); };
+    section.querySelector('summary')!.append(add);
+    render(); explain(section.querySelector<HTMLElement>('summary > span')!, hint.textContent!); section.append(list); return section;
   }
   /** Increment 85b: OpenSpec change records, backticked name references, and change elements. */
   private changeControls(category: IdCategory) {
-    const section = document.createElement('details'); section.className = 'config-category-changes';
+    const section = document.createElement('details'); section.className = 'config-category-section config-category-changes';
     const summary = document.createElement('summary'); summary.textContent = 'Changes and name references';
     const toggle = (text: string, checked: boolean, change: (checked: boolean) => void) => {
       const label = document.createElement('label'); label.className = 'config-checkbox';
@@ -339,7 +404,8 @@ export class ProjectConfigurationDialog {
       if (value) category.changes.capabilities = value; else delete category.changes.capabilities;
     }, [['', 'None'], ...this.draft.categories.filter(other => other.key !== category.key).map((other, n) => [other.key, other.name || `Category ${n + 1}`] as [string, string])]);
     const changeOptions = document.createElement('div'); changeOptions.className = 'config-category-change-options'; changeOptions.hidden = !category.changes; changeOptions.append(archive, capabilities);
-    section.append(summary, hint,
+    explain(summary, hint.textContent!); 
+    section.append(summary,
       toggle('Record change deltas', !!category.deltas, checked => { if (checked) category.deltas = true; else delete category.deltas; }),
       toggle('Link backticked names', !!category.nameReferences, checked => { if (checked) category.nameReferences = true; else delete category.nameReferences; }),
       toggle('Derived elements are changes', !!category.changes, checked => { if (checked) category.changes ??= {}; else delete category.changes; changeOptions.hidden = !checked; }),
@@ -358,11 +424,11 @@ export class ProjectConfigurationDialog {
     };
     section.querySelector('summary')!.append(add);
     const hint = document.createElement('p'); hint.className = 'config-hint';
-    hint.textContent = 'These rules recognize IDs for this category. Use a prefix such as REF or an advanced regex without slash delimiters, or a labelled list for numbers cited after a label. Rule numbers match the shared preview diagnostics.';
+    hint.textContent = 'These rules recognize IDs for this category.';
     const list = document.createElement('div'); list.className = 'config-category-rule-list';
     this.draft.rules.forEach((rule, i) => { if (rule.category === category.key) list.append(this.ruleEntry(rule, i, categoryIndex)); });
     const empty = document.createElement('p'); empty.className = 'config-hint config-category-rules-empty'; empty.textContent = 'No ID recognition rules in this category. Add a rule to recognize its IDs.'; empty.hidden = !!list.childElementCount;
-    section.append(hint, empty, list); return section;
+    explain(section.querySelector<HTMLElement>('summary > span')!, hint.textContent!); section.append(empty, list); return section;
   }
   private ruleEntry(rule: IdRule, i: number, categoryIndex: number) {
     const format = rule.list ? 'list' : rule.prefix !== undefined ? 'prefix' : 'pattern';
@@ -394,30 +460,36 @@ export class ProjectConfigurationDialog {
       row.append(this.field('List label', list.label, value => { list.label = value; }, undefined, 512),
         this.field('ID template', list.id, value => { list.id = value; }, undefined, 128));
       const advanced = document.createElement('details'); advanced.className = 'config-rule-list-advanced';
-      const summary = document.createElement('summary'); summary.textContent = 'Advanced';
+      const summary = explain(document.createElement('summary'), 'The pattern that reads each listed item after the label.'); summary.textContent = 'Advanced';
       const restore = document.createElement('button'); restore.type = 'button'; restore.className = 'quiet-button'; restore.textContent = 'Restore default item pattern';
       const item = this.field('Item pattern', list.item, value => { list.item = value; }, undefined, 512);
       restore.onclick = () => { list.item = DEFAULT_LIST_ITEM; item.querySelector('input')!.value = DEFAULT_LIST_ITEM; this.changed(); };
       const hint = document.createElement('p'); hint.className = 'config-hint';
       hint.textContent = 'Each listed item after the label refers to an ID built from the template: {number} is the item\'s number capture, so 1.1 refers to Requirement 1. Lists only add references; definitions still come from the category\'s other rules.';
-      advanced.append(summary, item, restore); row.append(hint, advanced);
+      advanced.append(summary, item, restore); explain(row.querySelector<HTMLElement>('label:last-of-type')!, hint.textContent!); row.append(advanced);
     } else row.append(this.field(rule.prefix !== undefined ? 'Prefix' : 'Regex pattern', rule.prefix ?? rule.pattern ?? '', value => { if (rule.prefix !== undefined) { rule.prefix = value; this.advancedPatterns.delete(rule); } else rule.pattern = value; }, undefined, rule.prefix !== undefined ? 64 : 512));
     if (rule.pattern !== undefined) {
       // Increment 89: an alias such as US1 refers to the templated ID, such as User Story 1, defined by another rule.
-      row.append(this.field('ID template (optional)', rule.id ?? '', value => { if (value) rule.id = value; else delete rule.id; this.advancedTemplates.delete(rule); }, undefined, 128));
+      row.append(this.field('ID template (optional)', rule.id ?? '', value => { if (value) rule.id = value; else { delete rule.id; delete rule.defines; } this.advancedTemplates.delete(rule); }, undefined, 128));
       const hint = document.createElement('p'); hint.className = 'config-hint';
-      hint.textContent = 'Leave empty when the match is the ID. With a template such as User Story {n}, each match refers to the ID built from the pattern\'s named captures, so (?<n>\\d+) in US1 refers to User Story 1. {n:int} drops leading zeros; {n:03} pads to 3 digits. Templated matches only add references; definitions come from the category\'s other rules.';
-      row.append(hint);
+      hint.textContent = 'Leave empty when the match is the ID. With a template such as User Story {n}, each match refers to the ID built from the pattern\'s named captures. Templated matches only add references, unless defined at definition sites.';
+      // Increment 96e: a templated rule may define instead, as for Kiro bugfix criteria (2.1 The system SHALL ... defines Criterion 2.1).
+      const defines = document.createElement('label'); defines.className = 'config-checkbox';
+      const input = document.createElement('input'); input.type = 'checkbox'; input.checked = !!rule.defines; input.setAttribute('aria-label', 'Defines at definition sites');
+      input.onchange = () => { if (input.checked) rule.defines = true; else delete rule.defines; this.changed(); };
+      defines.append(input, 'Defines at definition sites (matches elsewhere are ignored)');
+      explain(row.lastElementChild as HTMLElement, hint.textContent!); row.append(defines);
     }
     if (rule.prefix !== undefined) row.append(this.field('Separator', rule.separator ?? '-', value => { rule.separator = value as IdRule['separator']; this.advancedPatterns.delete(rule); }, [['-', 'Hyphen (-)'], ['_', 'Underscore (_)'], ['', 'None']]));
     const label = document.createElement('label'); label.className = 'config-checkbox'; const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = !!rule.ignoreCase;
     checkbox.onchange = () => { rule.ignoreCase = checkbox.checked; this.changed(); }; label.append(checkbox, 'Ignore case');
-    row.append(label, this.remove(`Remove rule ${i + 1}`, () => {
+    row.append(label);
+    const remove = this.remove(`Delete rule ${i + 1}`, () => {
       this.draft.rules.splice(i, 1); this.renderFields(); this.changed();
       this.dialog.querySelector<HTMLButtonElement>(`[data-category-index="${categoryIndex}"] .config-add-rule`)?.focus();
-    }, 'Remove rule'));
+    }, 'Delete');
     const title = () => `${i + 1}. ${rule.list ? (rule.list.label ? `List after ${rule.list.label} → ${rule.list.id}` : 'New labelled list') : rule.prefix ? rule.prefix + (rule.separator ?? '-') + 'digits' : rule.pattern ? rule.pattern + (rule.id ? ` → ${rule.id}` : '') : 'New rule'}`;
-    return configurationEntry(rule, row, title, !rule.prefix && !rule.pattern && !rule.list?.label);
+    return configurationEntry(rule, row, title, !rule.prefix && !rule.pattern && !rule.list?.label, remove);
   }
   private categoryStatusSites(category: IdCategory) {
     const section = document.createElement('details'); section.className = 'config-category-status-sites';
@@ -429,7 +501,7 @@ export class ProjectConfigurationDialog {
     mode.value = category.statusSites ? 'override' : 'inherit'; label.append(mode);
     const settings = category.statusSites ?? structuredClone(this.draft.statusSites ?? DEFAULT_STATUS_SITES);
     const controls = document.createElement('div'); controls.className = 'config-category-status-site-controls'; controls.hidden = !category.statusSites;
-    const renderControls = () => controls.replaceChildren(...statusSiteGroups(settings, () => { category.statusSites = structuredClone(settings); this.changed(); }));
+    const renderControls = () => controls.replaceChildren(...statusSiteGroups(settings, () => { category.statusSites = structuredClone(settings); this.changed(); }, `category:${category.key}`));
     renderControls();
     const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'quiet-button'; reset.textContent = 'Restore inheritance';
     reset.onclick = () => { delete category.statusSites; mode.value = 'inherit'; controls.hidden = true; this.changed(); };
@@ -441,7 +513,7 @@ export class ProjectConfigurationDialog {
       } else { delete category.statusSites; controls.hidden = true; }
       this.changed();
     };
-    section.append(summary, hint, label, controls, reset); return section;
+    explain(summary, hint.textContent!); section.append(summary, label, controls, reset); return section;
   }  private colorControls(category: IdCategory) {
     const section = document.createElement('details'); section.className = 'config-colors';
     const summary = document.createElement('summary'); summary.textContent = 'Card colors';
@@ -468,7 +540,7 @@ export class ProjectConfigurationDialog {
       const source = document.createElement('small'); source.textContent = 'example.md:1'; row.append(name, id, label, source); card.append(row);
       styleCategoryCard(card, category); group.append(title, controls, card); previews.append(group);
     }
-    section.append(summary, hint, previews); return section;
+    explain(summary, hint.textContent!); section.append(summary, previews); return section;
   }
   private refreshColorPreviews() {
     this.dialog.querySelectorAll<HTMLElement>('.config-category').forEach(row => {
@@ -564,6 +636,13 @@ export class ProjectConfigurationDialog {
     const added = [...after].filter(id => !before.has(id));
     const issues = index.findings.filter(item => item.kind !== 'pending');
     this.el('#config-summary').textContent = `${index.definitions.length} definitions · ${index.references.length} references · ${issues.filter(item => item.kind === 'unresolved').length} unresolved references · ${issues.filter(item => item.kind === 'duplicate').length} duplicate definitions${issues.some(item => item.kind === 'consistency') ? ` · ${issues.filter(item => item.kind === 'consistency').length} consistency findings` : ''}`;
+    // 96g: IDs per section tag, since pattern entries build their tags from the headings.
+    const tagCounts = new Map<string, Set<string>>();
+    for (const item of index.definitions) for (const tag of item.tags ?? []) tagCounts.set(tag, (tagCounts.get(tag) ?? new Set()).add(idKey(item)));
+    if (tagCounts.size) this.el('#config-summary').append(` · Section tags: ${[...tagCounts].sort(([a], [b]) => a.localeCompare(b)).map(([tag, ids]) => `${tag} ${ids.size}`).join(', ')}`);
+    // 105: markers of ID-defining checkbox items that gave no status, to add in Status sites.
+    const markers = Object.entries(index.unmappedMarkers ?? {}).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    if (markers.length) this.el('#config-summary').append(` · Checkbox markers without a status: ${markers.map(([marker, count]) => `${marker === ' ' ? 'space' : marker} ${count}`).join(', ')}`);
     this.el('#config-module-summary').textContent = `${index.definitions.filter(item => item.moduleAssignment?.state === 'assigned').length} definitions assigned to modules ? ${new Set(index.definitions.filter(item => item.moduleAssignment?.state === 'conflict').map(idKey)).size} module conflicts. Inspect ID issues for conflicting definitions.`;
     this.el('#config-changes').textContent = preview.baseline ? `${added.length} new IDs · ${lost.length} removed IDs. Removing recognition never removes Markdown text.` : 'Previous rules could not be analyzed; new/removed counts are unavailable. ' + (preview.baselineError ?? '');
     const identities = new Map(beforeItems.map(item => [JSON.stringify([item.file, item.offset, item.id]), idKey(item)]));

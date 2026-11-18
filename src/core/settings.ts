@@ -4,6 +4,7 @@ import { copyFile, mkdir, readFile, rename, stat, unlink, writeFile } from 'node
 import path from 'node:path';
 import type { RecentProjectsState, WorkspaceSession } from '../shared/types';
 import { parseFontSizes, validFontSize, type FontSizes } from '../shared/font-sizes';
+import { parsePanelLayout, validSidePanelWidth, validSourceRatio, type PanelLayout } from '../shared/panel-layout';
 
 const identity = (root: string) => process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root);
 const validRoot = (root: unknown): root is string => typeof root === 'string' && root.length <= 4096 && !/[\x00-\x1f]/.test(root) && path.isAbsolute(root);
@@ -74,6 +75,10 @@ export class Settings {
         settings.state.warning = 'Invalid, duplicate, or excess recent-project entries were ignored.';
       }
       settings.data.recentProjects = settings.state.projects;
+      // Increment 94: projects whose user agreed to send recorded content to an agent for summaries.
+      if (data.summaryConsent !== undefined) settings.data.summaryConsent = Array.isArray(data.summaryConsent) ? data.summaryConsent.filter(validRoot).slice(0, 100) : [];
+      // Increment 95: projects whose agent session logs the user chose to read.
+      if (data.activityProjects !== undefined) settings.data.activityProjects = Array.isArray(data.activityProjects) ? data.activityProjects.filter(validRoot).slice(0, 100) : [];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         settings.writable = false;
@@ -100,6 +105,34 @@ export class Settings {
     const result = await this.update(data => ({ ...data, fontSizes }));
     return result.warning ? { ok: false, message: 'Font sizes apply for this session but could not be saved. ' + result.warning } : { ok: true };
   }
+  panelLayout(): PanelLayout { return parsePanelLayout(this.data.panelLayout); }
+  async savePanelLayout(value: unknown): Promise<{ ok: boolean; message?: string }> {
+    const saved = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+    if (!saved || Object.keys(saved).some(key => !['explorerWidth', 'lensWidth', 'sourceRatio', 'sourceHidden'].includes(key))
+      || (saved.explorerWidth !== undefined && !validSidePanelWidth(saved.explorerWidth))
+      || (saved.lensWidth !== undefined && !validSidePanelWidth(saved.lensWidth))
+      || (saved.sourceRatio !== undefined && !validSourceRatio(saved.sourceRatio))
+      || (saved.sourceHidden !== undefined && saved.sourceHidden !== true)) {
+      throw new Error('Panel widths must be whole numbers between 160 and 4000 px, the source ratio between 0 and 1, and sourceHidden true when present.');
+    }
+    const panelLayout = parsePanelLayout(saved);
+    const result = await this.update(data => ({ ...data, panelLayout }));
+    return result.warning ? { ok: false, message: 'Panel widths apply for this session but could not be saved. ' + result.warning } : { ok: true };
+  }
+  summaryConsent(root: string): boolean { return ((this.data.summaryConsent ?? []) as string[]).some(saved => identity(saved) === identity(root)); }
+  async saveSummaryConsent(root: string, granted: boolean): Promise<{ ok: boolean; message?: string }> {
+    if (!validRoot(root)) throw new Error('Invalid project.');
+    const others = ((this.data.summaryConsent ?? []) as string[]).filter(saved => identity(saved) !== identity(root));
+    const result = await this.update(data => ({ ...data, summaryConsent: granted ? [root, ...others].slice(0, 100) : others }));
+    return result.warning ? { ok: false, message: 'The choice applies for this session but could not be saved. ' + result.warning } : { ok: true };
+  }
+  activityEnabled(root: string): boolean { return ((this.data.activityProjects ?? []) as string[]).some(saved => identity(saved) === identity(root)); }
+  async saveActivityEnabled(root: string, enabled: boolean): Promise<{ ok: boolean; message?: string }> {
+    if (!validRoot(root)) throw new Error('Invalid project.');
+    const others = ((this.data.activityProjects ?? []) as string[]).filter(saved => identity(saved) !== identity(root));
+    const result = await this.update(data => ({ ...data, activityProjects: enabled ? [root, ...others].slice(0, 100) : others }));
+    return result.warning ? { ok: false, message: 'The choice applies for this session but could not be saved. ' + result.warning } : { ok: true };
+  }
   contains(root: string) { return this.state.projects.some(project => identity(project.path) === identity(root)); }
   lastProject(): string | undefined { return validRoot(this.data.lastProject) ? this.data.lastProject : undefined; }
   workspaceSession(root: string): WorkspaceSession | undefined {
@@ -119,6 +152,10 @@ export class Settings {
   }
   remove(root: string) { return this.update(data => ({ ...data, recentProjects: this.state.projects.filter(project => identity(project.path) !== identity(root)) })); }
   clear() { return this.update(data => ({ ...data, recentProjects: [] })); }
+  forgetLastProject() { return this.update(({ lastProject: _closed, ...data }) => data); }
+  /** The folder that contained the last abstraction picked for installation; both install dialogs start there. */
+  abstractionFolder(): string | undefined { return validRoot(this.data.abstractionFolder) ? this.data.abstractionFolder : undefined; }
+  async saveAbstractionFolder(folder: string) { if (validRoot(folder)) await this.update(data => ({ ...data, abstractionFolder: folder })); }
 
   private update(change: (data: Record<string, unknown>) => Record<string, unknown>): Promise<RecentProjectsState> {
     const operation = this.queue.then(async () => {

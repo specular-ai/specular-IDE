@@ -44,10 +44,10 @@ export function validateStatuses(value: unknown): StatusPalette[] {
   return result;
 }
 
-/** Status ownership follows accepted ID definition sites and ends at the next heading. */
+/** Status ownership follows accepted ID definition sites and ends at the next heading. Returns (105) the checkbox markers of ID-defining items that gave no status where checkbox statuses are on, counted per marker. */
 export function extractStatuses(root: Root, definitions: Map<Nodes, Occurrence>, source: string,
   location: (offset: number, length: number) => SourceLocation, sites: StatusSites = DEFAULT_STATUS_SITES,
-  sitesByCategory?: Map<string, StatusSites>, palettes: StatusPalette[] = []) {
+  sitesByCategory?: Map<string, StatusSites>, palettes: StatusPalette[] = []): Record<string, number> {
   type Evidence = AuthoredStatus['evidence'][number];
   type Candidate = { value: string; evidence: Evidence };
   type Bucket = { baseline: Candidate[]; local: Map<string, Candidate[]>; count: number };
@@ -125,15 +125,20 @@ export function extractStatuses(root: Root, definitions: Map<Nodes, Occurrence>,
     }
   }
   // Checkbox markers (increment 88): the bracketed character after the bullet of an ID-defining list item, read from the source.
+  const unmapped: Record<string, number> = {};
   for (const [node, owner] of definitions) {
     if (node.type !== 'listItem' || node.position?.start.offset === undefined) continue;
     const found = checkboxMarker(source, node.position.start.offset);
     if (!found) continue;
     const effective = lanes(owner);
+    let enabled = false, mapped = false;
     for (const lane of [{ sites: effective.baseline, status: undefined as string | undefined }, ...effective.local]) {
       const site = lane.sites.checkboxes, value = site?.enabled ? site.markers[found.marker] : undefined;
-      if (value) push(owner, { value, evidence: { site: 'checkboxes', value, source: location(found.offset, found.end - found.offset) } }, lane.status);
+      enabled ||= !!site?.enabled;
+      if (value) { mapped = true; push(owner, { value, evidence: { site: 'checkboxes', value, source: location(found.offset, found.end - found.offset) } }, lane.status); }
     }
+    // 105: a marker no enabled checkbox site maps, such as `~` in a configuration saved before it was a default.
+    if (enabled && !mapped) unmapped[found.marker] = (unmapped[found.marker] ?? 0) + 1;
   }
   for (const [definition, bucket] of buckets) {
     const resolved = resolveStatusCandidates(bucket.baseline, bucket.local, palettes);
@@ -142,6 +147,7 @@ export function extractStatuses(root: Root, definitions: Map<Nodes, Occurrence>,
       evidence: resolved.candidates.map(candidate => candidate.evidence),
     };
   }
+  return unmapped;
 }
 /** Execute only in the terminable indexing/preview worker. */
 export function mapStatuses(index: ProjectIndex, palettes: StatusPalette[]): ProjectIndex {

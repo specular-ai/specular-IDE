@@ -2,6 +2,7 @@ import { idKey, idLabel } from './id-identity';
 import { scopeForFile, validScopePath, validateFolderPatterns } from './id-scopes';
 import type { IdConfiguration } from './id-configuration';
 import type { Occurrence, ProjectIndex } from '../shared/types';
+import type { SpecFolderCandidate } from './id-discovery';
 
 export type GeneratorTarget = 'features' | 'modules';
 export interface FolderGenerator { key: string; target: GeneratorTarget; pattern: string; exclusions: string[] }
@@ -17,9 +18,29 @@ export interface GeneratedFolder {
 export interface FolderPreview { entries: GeneratedFolder[]; notices: string[] }
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 export const provenanceKey = (p: FolderProvenance) => JSON.stringify([p.target, p.generator, p.folder]);
+/** Increment 96a: specification file names; a folder holding one directly is a specification folder. */
+export const SPEC_FILES = new Set(['spec.md', 'requirements.md', 'bugfix.md', 'design.md', 'tasks.md', 'plan.md', 'proposal.md']);
+export const isSpecFile = (file: string) => SPEC_FILES.has(file.slice(file.lastIndexOf('/') + 1).toLowerCase());
+/** `<root>/**` derives one entry per specification folder at any depth (96a); `<root>/*` one per child folder. */
+export const deepPattern = (pattern: string) => pattern.endsWith('/**');
+export const patternRoot = (pattern: string) => pattern.slice(0, deepPattern(pattern) ? -3 : -2);
+/** Increment 96a: the folders under `root` that directly hold a specification file and are not inside another one. */
+export function specificationFolders(root: string, files: readonly string[]) {
+  const folders = new Set<string>();
+  for (const file of files) if (file.startsWith(root + '/') && isSpecFile(file)) { const folder = file.slice(0, file.lastIndexOf('/')); if (folder !== root) folders.add(folder); }
+  return [...folders].filter(folder => ![...folders].some(other => folder.startsWith(other + '/'))).sort(compare);
+}
 function validatePatterns(patterns: { pattern: string }[]) {
-  try { validateFolderPatterns(patterns); }
-  catch (error) { throw new Error((error instanceof Error ? error.message : String(error)).replace(/ID scopes/g, 'Folder generators').replace(/ID scope/g, 'Folder generator')); }
+  // A `**` pattern shares the root syntax and the overlap rule of `*` patterns, so it is checked as its `*` form.
+  const checked = patterns.map(({ pattern }) => ({ pattern: typeof pattern === 'string' && deepPattern(pattern) ? pattern.slice(0, -1) : pattern }));
+  const roots = checked.map(({ pattern }) => typeof pattern === 'string' ? pattern.slice(0, -2).toLowerCase() : '');
+  if (patterns.some(({ pattern }, i) => pattern !== checked[i].pattern) && roots.some((root, i) => roots.some((other, j) => j !== i && root && (root === other || root.startsWith(other + '/'))))) throw new Error('Folder generator roots must not overlap, including disabled patterns.');
+  try { validateFolderPatterns(checked); }
+  catch (error) {
+    let message = (error instanceof Error ? error.message : String(error)).replace(/ID scopes/g, 'Folder generators').replace(/ID scope/g, 'Folder generator');
+    patterns.forEach(({ pattern }, i) => { if (pattern !== checked[i].pattern) message = message.split(`"${checked[i].pattern}"`).join(`"${pattern}"`); });
+    throw new Error(message.replace('ending in exactly one child wildcard', 'ending in one child wildcard (/*) or any-depth specification folders (/**)'));
+  }
 }
 
 export function validateFolderGenerators(value: unknown): FolderGenerator[] {
@@ -28,7 +49,7 @@ export function validateFolderGenerators(value: unknown): FolderGenerator[] {
     if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !['key', 'target', 'pattern', 'exclusions'].includes(key)) ||
       typeof item.key !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(item.key) || !['features', 'modules'].includes(item.target)) throw new Error('Invalid folder generator.');
     validatePatterns([{ pattern: item.pattern }]);
-    const base = item.pattern.slice(0, -2);
+    const base = patternRoot(item.pattern);
     if (!Array.isArray(item.exclusions) || item.exclusions.length > 64 || item.exclusions.some((path: unknown) => !validScopePath(path) || !path.startsWith(base + '/'))) throw new Error('Exclusions must be project-relative descendant folders of the generating pattern (at most 64).');
     if (new Set(item.exclusions.map((path: string) => path.toLowerCase())).size !== item.exclusions.length) throw new Error('Folder exclusions must be unique.');
     return { key: item.key, target: item.target, pattern: item.pattern, exclusions: [...item.exclusions].sort(compare) };
@@ -50,7 +71,8 @@ export function validateFolderGeneration(input: Record<string, unknown>, configu
     result.generatedFolders = input.generatedFolders.map(item => {
       if (!item || typeof item !== 'object' || Array.isArray(item) || Object.keys(item).some(key => !['generator', 'target', 'folder', 'entry', 'pattern', 'exclusions'].includes(key))) throw new Error('Invalid generated folder mapping.');
       const [rule] = validateFolderGenerators([{ key: item.generator, target: item.target, pattern: item.pattern, exclusions: item.exclusions }]);
-      if (!validScopePath(item.folder) || scopeForFile(item.folder + '/example.md', [{ pattern: rule.pattern }]) !== item.folder ||
+      const inside = deepPattern(rule.pattern) ? item.folder.startsWith(patternRoot(rule.pattern) + '/') : scopeForFile(item.folder + '/example.md', [{ pattern: rule.pattern }]) === item.folder;
+      if (!validScopePath(item.folder) || !inside ||
         typeof item.entry !== 'string' || !configuration[rule.target]?.some(entry => entry.key === item.entry)) throw new Error('Generated mappings need an existing entry and an immediate child folder of their saved pattern.');
       const manual = rule.target === 'features' ? configuration.featureRules?.some(entry => entry.features.includes(item.entry)) : configuration.moduleRules?.some(entry => entry.modules.includes(item.entry));
       if (manual) throw new Error('Generated entries obtain file mappings from their generator; manual file rules must target explicit entries.');
@@ -93,7 +115,9 @@ export function previewFolderGenerators(input: readonly FolderGenerator[], files
   const manualSignatures = new Map<string, string>();
   let evidenceCount = 0;
   for (const generator of generators) {
-    const match = (file: string) => generator.exclusions.some(path => file.toLowerCase().startsWith(path.toLowerCase() + '/')) ? undefined : scopeForFile(file, [{ pattern: generator.pattern }]);
+    const specs = deepPattern(generator.pattern) ? specificationFolders(patternRoot(generator.pattern), documents) : undefined;
+    const match = (file: string) => generator.exclusions.some(path => file.toLowerCase().startsWith(path.toLowerCase() + '/')) ? undefined
+      : specs ? specs.find(folder => file.startsWith(folder + '/')) : scopeForFile(file, [{ pattern: generator.pattern }]);
     const folders = new Map<string, string[]>();
     for (const file of documents) {
       const folder = match(file); if (!folder) continue;
@@ -151,6 +175,38 @@ export function previewFolderGenerators(input: readonly FolderGenerator[], files
   if (!entries.length) notices.push('No matching folders with included Markdown.');
   notices.push('Folders without included Markdown are omitted. Markdown-only folders with no ID definitions appear with zero IDs. Ordinary mentions never assign membership.');
   return { entries: entries.sort((a, b) => compare(provenanceKey(a.provenance), provenanceKey(b.provenance))), notices };
+}
+
+/** Increment 96: does the draft already derive this target from the pattern's root, or from a root that overlaps it? */
+export function folderRootTaken(configuration: IdConfiguration, target: GeneratorTarget, pattern: string) {
+  const root = patternRoot(pattern).toLowerCase();
+  return (configuration.folderGenerators ?? []).some(rule => {
+    const other = patternRoot(rule.pattern).toLowerCase();
+    return rule.target === target && (other === root || other.startsWith(root + '/') || root.startsWith(other + '/'));
+  });
+}
+/** Increment 96: add proposed generators to a draft, keyed like Add folder pattern; patterns whose root is already derived are skipped. */
+export function addFolderGenerators(configuration: IdConfiguration, proposed: readonly Pick<FolderGenerator, 'target' | 'pattern' | 'exclusions'>[]) {
+  const draft = structuredClone(configuration), added: FolderGenerator[] = [];
+  const used = new Set([...(draft.folderGenerators ?? []).map(rule => rule.key), ...(draft.generatedFolders ?? []).map(mapping => mapping.generator)]);
+  for (const item of proposed) {
+    if (folderRootTaken(draft, item.target, item.pattern)) continue;
+    let n = 1; while (used.has(`generator${n}`)) n++;
+    const rule = { key: `generator${n}`, target: item.target, pattern: item.pattern, exclusions: [...item.exclusions] };
+    used.add(rule.key); (draft.folderGenerators ??= []).push(rule); added.push(rule);
+  }
+  validateFolderGenerators(draft.folderGenerators ?? []);
+  return { configuration: draft, added };
+}
+/** Increment 96: defined IDs each spec folder would receive under a draft, as Update assigns them. Counts stay unknown past the preview's limits. */
+export function measureSpecFolders(candidates: SpecFolderCandidate[], files: readonly string[], index: ProjectIndex, configuration: IdConfiguration) {
+  for (const candidate of candidates) {
+    try {
+      const preview = previewFolderGenerators([{ key: 'proposed', target: 'features', pattern: candidate.pattern, exclusions: [] }], files, index, configuration);
+      const counts = new Map(preview.entries.map(entry => [entry.provenance.folder, entry.members.filter(member => member.state === 'assigned').length]));
+      candidate.ids = candidate.folders.map(folder => counts.get(folder) ?? 0);
+    } catch { delete candidate.ids; }
+  }
 }
 
 /** Explicit update only. No mutation and no partial staging when a naming/path collision blocks review. */

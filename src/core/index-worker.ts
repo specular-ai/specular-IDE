@@ -1,6 +1,6 @@
 import type { IdConfiguration } from './id-configuration';
 import type { ProjectIndex } from '../shared/types';
-export interface IndexRequest { updateFolders?: import('./folder-generators').GeneratorTarget; folderGenerators?: import('./folder-generators').FolderGenerator[]; previousFolders?: import('./folder-generators').GeneratedFolder[]; discover?: boolean; classify?: import('./id-discovery').ConventionProposal; removeCategoryKeys?: string[]; revision: number; configurationRevision?: string; configuration?: IdConfiguration; documents: Record<string, string> }
+export interface IndexRequest { updateFolders?: import('./folder-generators').GeneratorTarget; folderGenerators?: import('./folder-generators').FolderGenerator[]; previousFolders?: import('./folder-generators').GeneratedFolder[]; discover?: boolean; /** Increment 97b: the discovery profiles to run. */ profiles?: unknown[]; classify?: import('./id-discovery').ConventionProposal; removeCategoryKeys?: string[]; revision: number; configurationRevision?: string; configuration?: IdConfiguration; documents: Record<string, string> }
 export interface IndexResponse { folderConfiguration?: IdConfiguration; folderPreview?: import('./folder-generators').FolderPreview; classifications?: import('./discovery-category-classification').DiscoveryCategoryDecision[]; removedOverrideIds?: string[]; inventory?: import('./id-discovery').CandidateInventory; revision: number; index?: ProjectIndex; error?: string }
 export interface AnalysisWorker {
   onmessage: ((event: MessageEvent<IndexResponse>) => void) | null;

@@ -368,6 +368,29 @@ test('the fake Codex and Claude Code agents propose a checkbox site, statuses, d
   }
 });
 
+test('the fake Codex and Claude Code agents propose a feature generator with its measured folders (96)', async () => {
+  for (const { result } of [await codexRun('folders'), await claudeRun('folders')]) {
+    assert.equal(result.ok, true, result.message);
+    const { configuration, evaluation, folderRationale } = result.proposal!;
+    assert.deepEqual(configuration.folderGenerators, [{ key: 'specs', target: 'features', pattern: 'specs/*', exclusions: [] }]);
+    assert.deepEqual(evaluation.folders!.generators.map(g => [g.pattern, g.folders]), [['specs/*', 2]]);
+    assert.equal(folderRationale, 'Each folder in specs/ holds one feature specification.');
+    assert.match(result.message, /folder-derived features or modules/);
+  }
+});
+
+test('the fake Codex and Claude Code agents propose section tags with their measured counts (96h)', async () => {
+  for (const { result } of [await codexRun('tags'), await claudeRun('tags')]) {
+    assert.equal(result.ok, true, result.message);
+    const { configuration, evaluation, tagRationale } = result.proposal!;
+    assert.deepEqual(configuration.categories.find(c => c.key === 'tasks')!.sectionTags, [{ heading: 'Tasks', tag: 'list:tasks' }]);
+    // T001 in each folder and T002: three distinct task IDs, each under its task list's heading.
+    assert.deepEqual(evaluation.tags!.categories.map(c => [c.key, c.tags.map(t => [t.tag, t.ids]), c.untagged]), [['tasks', [['list:tasks', 3]], 0]]);
+    assert.equal(tagRationale, 'Every task sits under its task list heading: list:tasks 3.');
+    assert.match(result.message, /section tags/);
+  }
+});
+
 test('Codex discovery stops on built-in tools, other MCP servers, and missing submissions', async () => {
   const violation = await codexRun('violation');
   assert.equal(violation.result.ok, false); assert.match(violation.result.message, /Codex attempted a shell command/);
@@ -419,11 +442,25 @@ test('Claude Code discovery runs headless with only the Specular MCP tools and n
   assert.deepEqual(await readdir(runRoot), [], 'the run directory with its MCP configuration is removed');
 });
 
+test('Claude Code discovery goes on after a Specular tool asked for by its bare name, and stops after repeated refused tools (107)', async () => {
+  const bare = await claudeRun('bare-name');
+  assert.equal(bare.result.ok, true, bare.result.message);
+  assert.deepEqual(bare.result.refusedTools, ['read_markdown']);
+  assert.equal(bare.result.toolCalls, 3, 'the refused call uses no budget');
+  assert.ok(bare.progress.includes('status: The agent asked for "read_markdown", which is not a Specular tool; it was refused and nothing ran (1 of 4 allowed).'), bare.progress.join('\n'));
+  assert.match(bare.invocation.systemPrompt, /each Specular tool is named with the prefix mcp__specular__, so read_markdown is mcp__specular__read_markdown/);
+  const loop = await claudeRun('refused-loop');
+  assert.equal(loop.result.ok, false);
+  assert.match(loop.result.message, /^Stopped: the agent asked 5 times for tools that discovery does not offer \("read_markdown", "list_matches"\)\. No configuration was changed\.$/);
+  assert.deepEqual(loop.result.refusedTools, ['read_markdown', 'list_matches', 'read_markdown', 'list_matches', 'read_markdown']);
+});
+
 test('Claude Code discovery stops on other tools and reports sign-in and missing submissions', async () => {
   const extra = await claudeRun('extra-tool');
   assert.equal(extra.result.ok, false); assert.match(extra.result.message, /Claude Code offered other tools \(Bash\)/);
+  // Increment 107: a tool the session does not offer, such as Bash, is refused by Claude Code and only recorded; the run goes on.
   const violation = await claudeRun('violation');
-  assert.equal(violation.result.ok, false); assert.match(violation.result.message, /Claude Code attempted the tool "Bash"/);
+  assert.equal(violation.result.ok, true, violation.result.message); assert.deepEqual(violation.result.refusedTools, ['Bash']);
   const signedOut = await claudeRun('signed-out');
   assert.equal(signedOut.result.ok, false); assert.match(signedOut.result.message, /Claude Code stopped: Not logged in/);
   const silent = await claudeRun('no-submit');

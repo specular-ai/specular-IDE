@@ -2,7 +2,7 @@
 
 This host-rendered list inherits Specular's dark/light mode automatically, including live switching. No palette code or core imports are needed. Validate readable entries and source links in both modes after building independently against the public SDK.
 
-This increment 30 authoring example turns indexed definitions into a list with current source evidence. Duplicate authored IDs remain separate rows by file and offset. It emits an empty list while the index is pending. Increment 31 can run it inside Specular: open a Markdown project, choose Project Lens > Open plugin view..., and select this directory after building it. The list opens in a workspace tab with source-navigation buttons. Loaded-plugin buttons reopen it after tab closure or project changes. Loading is session-only; restart to load a replacement. Persistent installation remains increment 33.
+This increment 30 authoring example turns indexed definitions into a list with current source evidence. Duplicate authored IDs remain separate rows by file and offset. It emits an empty list while the index is pending. Increment 31 can run it inside Specular: open a Markdown project, choose **Abstractions > Install abstraction folder…**, and select this directory after building it. The list opens in a workspace tab with source-navigation buttons. Its entry under **Available abstractions** in Project Lens reopens it after tab closure or project changes.
 
 Copy this entire folder outside the Specular repository. Obtain the local SDK tarball and follow the [SDK authoring instructions](../../../packages/plugin-api/README.md), which are also included inside the installed SDK package at `node_modules/@specular/plugin-api/README.md`:
 

@@ -49,7 +49,7 @@ export class CodexConversation {
     }
   }
   snapshot(): ConversationState { return { ...this.state, scopeMismatch: !!(this.threadId || this.savedThreadId || this.state.projectPath) && !samePath(this.state.projectPath, this.state.openProject), messages: this.state.messages.map(item => ({ ...item })) }; }
-  setOpenProject(root: string) { this.state.openProject = root; this.publish(); }
+  setOpenProject(root: string | undefined) { this.state.openProject = root; this.publish(); }
   async useOpenProject(): Promise<{ ok: boolean; message?: string }> {
     if (this.active || this.changingProject || this.restoring || this.state.commandBusy) return { ok: false, message: 'Stop or finish the operation before changing its project.' };
     const root = this.state.openProject;

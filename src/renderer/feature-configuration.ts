@@ -2,6 +2,7 @@ import type { IdConfiguration } from '../core/id-configuration';
 import { editFeatureFileRule, removeFeatureFileRule, type FeatureFileRule, removeProjectFeature, editFeatureOverride, mergeFeatureOverride, type FeatureOverride, type ProjectFeature } from '../core/features';
 import { configurationEntry, rememberConfigurationEntries } from './configuration-entry';
 import { idLabel } from '../core/id-identity';
+import { explain } from './hover-hint';
 
 /** Feature definitions and exact memberships share the host's guarded draft save. */
 export class FeatureConfigurationEditor {
@@ -27,21 +28,19 @@ export class FeatureConfigurationEditor {
   }
   render() {
     rememberConfigurationEntries(this.root); this.controls = []; this.fileControls = [];
-    const config = this.draft(), title = document.createElement('h3'); title.textContent = 'Application features';
-    const hint = document.createElement('p'); hint.className = 'config-hint';
-    hint.textContent = 'Features are independent of modules and categories. File rules combine memberships from definition files. Exact-ID overrides replace them; an empty override means explicitly unassigned.';
+    const config = this.draft();
     const names = document.createElement('section'); names.className = 'feature-names';
     const add = this.button('Add feature', () => {
       let n = 1; while (config.features?.some(feature => feature.key === `feature${n}`)) n++;
       (config.features ??= []).push({ key: `feature${n}`, name: '' });
-    }, '.feature-names > .config-entry:last-child input'); add.disabled = (config.features?.length ?? 0) >= 64; const header = document.createElement('div'); header.className = 'config-section-heading'; header.append(title, add);
+    }, '.feature-names > .config-entry:last-child input'); add.disabled = (config.features?.length ?? 0) >= 64; const header = document.createElement('div'); header.className = 'config-section-heading'; header.append(add);
     for (const [i, feature] of (config.features ?? []).entries()) {
       const row = document.createElement('div'); row.className = 'feature-row'; row.dataset.featureIndex = String(i);
       row.append(this.input('Feature name', feature.name, value => { feature.name = value; }),
         this.button('Remove feature', () => removeProjectFeature(config, feature.key)), this.rules(feature, i), this.assignments(feature, i));
       names.append(configurationEntry(feature, row, () => feature.name || 'New feature', !feature.name));
     }
-    this.root.replaceChildren(header, hint, names, this.assignments()); this.updateControls();
+    this.root.replaceChildren(header, names, this.assignments()); this.updateControls();
   }
   private rules(feature: ProjectFeature, index: number) {
     const config = this.draft(), section = document.createElement('section'); section.className = 'feature-rules';
@@ -59,7 +58,7 @@ export class FeatureConfigurationEditor {
       let n = 1; while (config.featureRules?.some(rule => rule.key === `files${n}`)) n++;
       (config.featureRules ??= []).push({ key: `files${n}`, path: '', scope: 'file', features: [feature.key] });
     }, `${selector} > .config-entry:last-child input`); add.classList.add('feature-add-rule'); heading.append(title, add);
-    const hint = document.createElement('p'); hint.className = 'config-hint'; hint.textContent = 'Assign IDs defined in a file or folder to this feature. Editing or removing a rule here leaves other features unchanged.'; section.append(heading, hint);
+    const hint = document.createElement('p'); hint.className = 'config-hint'; hint.textContent = 'Assign IDs defined in a file or folder to this feature. Editing or removing a rule here leaves other features unchanged.'; explain(title, hint.textContent!); section.append(heading);
     const rules = (config.featureRules ?? []).filter(rule => rule.features.includes(feature.key));
     if (!rules.length) { const empty = document.createElement('p'); empty.className = 'config-hint'; empty.textContent = 'No file or folder rules in this feature.'; section.append(empty); }
     for (const rule of rules) {
@@ -92,7 +91,8 @@ export class FeatureConfigurationEditor {
     add.className += ' feature-add-assignment'; heading.append(title, add);
     const hint = document.createElement('p'); hint.className = 'config-hint';
     hint.textContent = feature ? 'Assign an exact ID to this feature instead of its file/folder assignments. Adding an existing ID keeps its other explicit features. Removing the last feature leaves the ID unassigned.' : 'These IDs override file/folder assignments with no feature. Restore file/folder assignments to remove an override.';
-    section.append(heading, hint);
+    explain(title, hint.textContent!);
+    section.append(heading);
     for (const rule of (config.featureOverrides ?? []).filter(rule => feature ? rule.features.includes(feature.key) : !rule.features.length)) {
       const owner = feature?.key ?? '';
       let owners = this.views.get(rule); if (!owners) { owners = new Map(); this.views.set(rule, owners); }

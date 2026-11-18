@@ -10,13 +10,33 @@ export class AgentSetup {
       <p>Check your locally installed agents. Leave the path empty to search PATH, or choose an executable. Each check runs only <code>--version</code>, with a five-second limit.</p>
       <div class="agent-cards"></div>
       <p class="agent-note">Install agents manually. Claude paths last for this session. Remembered Codex connections retain their executable path. Open Codex chat after connecting to start a conversation.</p>
+      <section id="activity-setting" class="agent-note" hidden><label><input type="checkbox" id="activity-enabled" /> <strong>Read agent sessions for this project</strong></label> Lets activity views read the Claude Code and Codex session logs on this computer whose working folder is inside this project: sessions, tool calls, files, and commands, without message text. Nothing is sent anywhere. <span id="activity-setting-status" role="status"></span></section>
+      <section id="summary-consent-setting" class="agent-note" hidden><strong>Summaries.</strong> This project allows sending recorded specification text to an agent for summaries. <button type="button" class="quiet-button" id="summary-consent-revoke">Stop allowing summaries</button></section>
       <div class="dialog-actions"><button class="button secondary" id="agent-setup-close">Close</button></div>`;
     for (const [id, name] of [['codex', 'Codex'], ['claude', 'Claude Code']] as const) this.addAgent(id, name);
     this.dialog.querySelector<HTMLButtonElement>('#agent-setup-close')!.onclick = () => this.dialog.close();
     document.body.append(this.dialog);
     this.dialog.addEventListener('close', () => { const key = this.dialog.querySelector<HTMLInputElement>('#codex-api-key'); if (key) key.value = ''; const callback = this.onClose; this.onClose = undefined; callback?.(); });
   }
-  show(onClose?: () => void) { if (!document.querySelector('dialog[open]')) { this.onClose = onClose; this.dialog.showModal(); void this.api.codexStatus().then(state => this.updateConnection?.(state)).catch(() => undefined); } }
+  show(onClose?: () => void) { if (!document.querySelector('dialog[open]')) { this.onClose = onClose; this.dialog.showModal(); void this.api.codexStatus().then(state => this.updateConnection?.(state)).catch(() => undefined); this.showSummaryConsent(); this.showActivitySetting(); } }
+  /** Increment 95: whether activity views may read this project's agent session logs. */
+  private showActivitySetting() {
+    const section = this.dialog.querySelector<HTMLElement>('#activity-setting')!, box = section.querySelector<HTMLInputElement>('#activity-enabled')!, status = section.querySelector<HTMLElement>('#activity-setting-status')!;
+    section.hidden = true; status.textContent = '';
+    void this.api.activityEnabled().then(enabled => { box.checked = enabled; section.hidden = false; }).catch(() => undefined);
+    box.onchange = () => {
+      const enabled = box.checked; box.disabled = true;
+      void this.api.saveActivityEnabled(enabled).then(result => { status.textContent = result.ok ? '' : result.message ?? ''; window.dispatchEvent(new Event('specular:activity')); })
+        .catch(() => { box.checked = !enabled; status.textContent = 'The setting could not be changed.'; }).finally(() => { box.disabled = false; });
+    };
+  }
+  /** Increment 94: the project's summary consent, revocable here. */
+  private showSummaryConsent() {
+    const section = this.dialog.querySelector<HTMLElement>('#summary-consent-setting')!, revoke = section.querySelector<HTMLButtonElement>('#summary-consent-revoke')!;
+    section.hidden = true;
+    void this.api.summaryConsent().then(granted => { section.hidden = !granted; }).catch(() => undefined);
+    revoke.onclick = () => { void this.api.saveSummaryConsent(false).then(() => { section.hidden = true; }).catch(() => undefined); };
+  }
   private updateConnection?: (state: CodexConnectionState) => void;
   private addAgent(id: AgentId, name: string) {
     const card = document.createElement('form'); card.className = 'agent-card'; card.dataset.agent = id;

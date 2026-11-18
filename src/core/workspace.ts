@@ -53,7 +53,8 @@ export class Workspace {
     const bytes = await this.buffer(await this.resolve(file));
     return { path: file, text: bytes.toString('utf8').replace(/^\uFEFF/, ''), version: hash(bytes) };
   }
-  async createMarkdown(name: string): Promise<OpenDocument> {
+  /** Increment 36: `folder` is a project-relative existing folder; empty means the project root. */
+  async createMarkdown(name: string, folder = ''): Promise<OpenDocument> {
     if (!name || name !== name.trim() || /[<>:"/\\|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name)) {
       throw new Error('Enter a filename without folders, surrounding spaces, or Windows-invalid characters.');
     }
@@ -62,14 +63,24 @@ export class Workspace {
     if (file.length > 255 || /^(con|prn|aux|nul|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?: *\.|$)/i.test(file)) {
       throw new Error('This filename is too long or reserved by Windows.');
     }
+    let directory = this.root;
+    if (folder) {
+      try { directory = await this.resolve(folder); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error(`The folder “${folder}” no longer exists. Choose another folder.`);
+        throw error;
+      }
+      if (!(await stat(directory)).isDirectory()) throw new Error(`“${folder}” is not a folder. Choose another folder.`);
+    }
+    const relative = [...path.relative(this.root, directory).split(path.sep).filter(Boolean), file].join('/');
     try {
       // Exclusive creation refuses files, directories, and links, including concurrent creation.
-      await writeFile(path.join(this.root, file), '', { flag: 'wx' });
+      await writeFile(path.join(directory, file), '', { flag: 'wx' });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`“${file}” already exists. Choose another filename.`);
-      throw new Error(`Could not create “${file}”. Check the project folder and write permissions.`);
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`“${relative}” already exists. Choose another filename.`);
+      throw new Error(`Could not create “${relative}”. Check the project folder and write permissions.`);
     }
-    return { path: file, text: '', version: hash(Buffer.alloc(0)) };
+    return { path: relative, text: '', version: hash(Buffer.alloc(0)) };
   }
   async save(file: string, text: string, version: string): Promise<SaveResult> {
     const target = await this.resolve(file);

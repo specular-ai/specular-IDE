@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "id": "specular.feature-dossier",
+  "title": "Feature dossier",
+  "version": "1.1.0",
+  "api": ">=0.2.0 <0.3.0",
+  "customApi": 2,
+  "entry": "dist/index.js",
+  "capabilities": ["workspace.read", "source.navigate", "summary.generate"],
+  "models": ["project@1", "physical@1"],
+  "views": [
+    { "id": "dossier", "title": "Feature dossier", "kind": "custom" }
+  ]
+}

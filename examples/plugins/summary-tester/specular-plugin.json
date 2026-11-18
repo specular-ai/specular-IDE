@@ -1,0 +1,2 @@
+{ "manifestVersion": 1, "id": "example.summary-tester", "title": "Summary tester", "version": "1.0.0", "api": ">=0.2.0 <0.3.0", "entry": "index.js", "customApi": 2,
+  "capabilities": ["workspace.read", "summary.generate"], "models": ["project@1", "physical@1"], "views": [{ "id": "tester", "title": "Summary tester", "kind": "custom" }] }

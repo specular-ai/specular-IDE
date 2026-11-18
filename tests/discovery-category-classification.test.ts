@@ -29,7 +29,7 @@ test('finite evidence reports partial, wider and conflicting recognition as ambi
   const wider = suggestion('found', 'Records', { pattern: '\\b(?:REQ|TASK)-\\d+\\b' }, ['REQ-1', 'TASK-1']);
   assert.deepEqual(decide(configured, wider, [['req'], ['task']]), { kind: 'ambiguous', reason: 'multiple-existing-categories' });
   assert.deepEqual(decide(configured, suggestion('found', 'Records', { pattern: '\\bREC-\\d+\\b' }, ['REQ-1', 'REC-1']), [['req'], []]), { kind: 'ambiguous', reason: 'partial-evidence-coverage' });
-  assert.deepEqual(decide(configured, suggestion('found', 'Requirements plus', { pattern: '\\bREQ-(?:\\d+|X)\\b' }), [['req']]), { kind: 'ambiguous', reason: 'different-rule-for-existing-evidence' });
+  assert.deepEqual(decide(configured, suggestion('found', 'Requirements plus', { pattern: '\\bREQ-(?:\\d+|X)\\b' }), [['req']]), { kind: 'ambiguous', reason: 'different-rule-for-existing-evidence', category: 'req' });
 });
 
 test('new categories remain new while name and proposal identity collisions stay explicit', () => {
@@ -54,4 +54,10 @@ test('staging changes the next decision without requiring a saved configuration'
   assert.equal(decide(before, candidate, [[]]).kind, 'new');
   const staged: IdConfiguration = { ...before, categories: [...before.categories, category('staged', 'Architecture records')], rules: [...before.rules, rule('staged-rule', 'staged', { prefix: 'ADR' })] };
   assert.deepEqual(decide(staged, candidate, [['staged']]), { kind: 'existing', category: 'staged', reason: 'equivalent-rule' });
+});
+
+test('a templated rule identical to a draft rule is existing, since its evidence is not an ID that rules match (96f)', () => {
+  const bugfix = { pattern: String.raw`^(?<group>\d+)\.(?<item>\d+)(?=\s)`, id: 'Criterion {group}.{item}', defines: true };
+  const configured = draft([rule('criteria-bugfix', 'task', bugfix)]);
+  assert.deepEqual(decide(configured, suggestion('found', 'Acceptance criterion', bugfix, ['WHEN a user signs in THE system SHALL greet them']), [[]]), { kind: 'existing', category: 'task', reason: 'equivalent-rule' });
 });

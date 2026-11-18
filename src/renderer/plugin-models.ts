@@ -1,12 +1,14 @@
 import { idKey } from '../core/id-identity';
 import { buildDependencyGraph } from '../core/dependencies';
+import { analyzedDocuments } from '../core/id-configuration';
+import { effectiveLayers } from '../core/layers';
 import type { FeatureAssignment, IdElement, PhysicalModel, ProjectConfiguration, ProjectModel, ThemeColors } from '../../packages/plugin-api/src/index';
 import type { Occurrence } from '../shared/types';
 import type { WorkspaceViewSnapshot } from './abstraction-views';
 
 export type HostModels = { project: ProjectModel; physical: PhysicalModel };
 /** Bump when the project model's content changes under the same `project@1` contract. */
-export const PROJECT_EXTRACTOR_VERSION = '6';
+export const PROJECT_EXTRACTOR_VERSION = '8';
 const range = (o: { file: string; offset: number; end: number }) => ({ file: o.file, start: o.offset, end: o.end });
 const dateRecord = (file: string, d: { value: string; text: string; offset: number; end: number }, rule: 'status-date' | 'event') => ({ value: d.value, text: d.text, source: { file, start: d.offset, end: d.end }, rule });
 const category = (c: NonNullable<Occurrence['category']>) => ({ key: c.key, name: c.name, ...(c.role ? { role: c.role } : {}) });
@@ -23,11 +25,12 @@ function idElements(occurrences: readonly Occurrence[]): IdElement[] {
   for (const o of occurrences) { const key = idKey(o); groups.set(key, [...(groups.get(key) ?? []), o]); }
   return [...groups].map(([key, group]) => {
     const definitions = group.filter(o => o.kind === 'definition'), first = definitions[0] ?? group[0];
-    const status = first.authoredStatus;
+    const status = first.authoredStatus, tags = [...new Set(definitions.flatMap(o => o.tags ?? []))];
     return { key, id: first.id, ...(first.scope ? { scope: first.scope } : {}), ...(first.category ? { category: category(first.category) } : {}),
       definitions: definitions.map(range),
       ...(first.moduleAssignment ? { modules: moduleAssignment(first.moduleAssignment) } : {}),
       ...(first.featureAssignment ? { features: featureAssignment(first.featureAssignment) } : {}),
+      ...(tags.length ? { tags } : {}),
       ...(status ? { status: { state: status.state, occurrences: status.evidence.map(e => ({ value: e.value, name: e.display ?? e.value, ...(e.site ? { site: e.site } : {}), source: range(e.source), ...(e.date ? { date: dateRecord(e.source.file, e.date, 'status-date') } : {}) })) } } : {}) };
   });
 }
@@ -39,6 +42,7 @@ function configurationLists(snapshot: WorkspaceViewSnapshot): ProjectConfigurati
     statuses: (c.statuses ?? []).map(item => ({ name: item.name, ...colors(item.colors) })),
     modules: (c.modules ?? []).map(item => ({ key: item.key, name: item.name })),
     features: (c.features ?? []).map(item => ({ key: item.key, name: item.name })),
+    layers: effectiveLayers(c),
   };
 }
 
@@ -66,7 +70,8 @@ export function modelsFor(snapshot: WorkspaceViewSnapshot): HostModels {
       events: snapshot.ready ? (snapshot.index.events ?? []).map(e => ({ date: dateRecord(e.file, e.date, 'event'), text: e.text, source: range(e), mentionedIds: [...e.mentioned], ...(e.owner ? { owner: e.owner } : {}), site: e.site, kind: e.kind, ...(e.label ? { label: e.label } : {}) })) : [],
       configuration: configurationLists(snapshot) },
     physical: { name: 'physical', ...envelope('specular.physical', '1'), ready: true, folders: [...snapshot.folders], files: snapshot.files.map(file => ({ path: file.path, markdown: file.markdown })),
-      documents: Object.entries(snapshot.documents).map(([file, text]) => ({ file, text })),
+      // 99a: excluded files stay listed, but plugins read only the text Specular analyzes.
+      documents: Object.entries(analyzedDocuments(snapshot.documents, snapshot.configuration)).map(([file, text]) => ({ file, text })),
       warnings: snapshot.warnings.length ? [`The project has ${snapshot.warnings.length} file-reading warning(s).`] : [] },
   };
   builtModels.set(snapshot, models); return models;

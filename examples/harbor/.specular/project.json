@@ -1,69 +1,367 @@
 {
   "version": 1,
   "categories": [
-    { "key": "requirements", "name": "Requirements", "role": "requirement", "colors": { "light": "#B7791F", "dark": "#E9C46A" } },
-    { "key": "decisions", "name": "Design decisions", "role": "design", "colors": { "light": "#187D75", "dark": "#75C9B5" } },
-    { "key": "tasks", "name": "Delivery tasks", "role": "task", "colors": { "light": "#4267B2", "dark": "#91B5F4" } }
+    {
+      "key": "requirements",
+      "name": "Requirements",
+      "role": "requirement",
+      "colors": {
+        "light": "#b7791f",
+        "dark": "#e9c46a"
+      }
+    },
+    {
+      "key": "decisions",
+      "name": "Design decisions",
+      "role": "design",
+      "colors": {
+        "light": "#187d75",
+        "dark": "#75c9b5"
+      }
+    },
+    {
+      "key": "tasks",
+      "name": "Delivery tasks",
+      "role": "task",
+      "colors": {
+        "light": "#4267b2",
+        "dark": "#91b5f4"
+      }
+    }
   ],
   "rules": [
-    { "key": "requirements", "category": "requirements", "prefix": "REQ" },
-    { "key": "decisions", "category": "decisions", "prefix": "DD" },
-    { "key": "tasks", "category": "tasks", "prefix": "TASK" }
+    {
+      "key": "requirements",
+      "category": "requirements",
+      "prefix": "REQ"
+    },
+    {
+      "key": "decisions",
+      "category": "decisions",
+      "prefix": "DD"
+    },
+    {
+      "key": "tasks",
+      "category": "tasks",
+      "prefix": "TASK"
+    }
   ],
   "modules": [
-    { "key": "reservations", "name": "Reservations" },
-    { "key": "access", "name": "Access control" },
-    { "key": "messaging", "name": "Notifications" },
-    { "key": "operations", "name": "Facility operations" }
+    {
+      "key": "reservations",
+      "name": "Reservations"
+    },
+    {
+      "key": "access",
+      "name": "Access control"
+    },
+    {
+      "key": "messaging",
+      "name": "Notifications"
+    },
+    {
+      "key": "operations",
+      "name": "Facility operations"
+    }
   ],
   "moduleRules": [
-    { "key": "reservation-design", "scope": "file", "path": "design/reservations.md", "modules": ["reservations"] },
-    { "key": "operations-design", "scope": "file", "path": "design/operations.md", "modules": ["operations"] }
+    {
+      "key": "reservation-design",
+      "path": "design/reservations.md",
+      "scope": "file",
+      "modules": [
+        "reservations"
+      ]
+    },
+    {
+      "key": "operations-design",
+      "path": "design/operations.md",
+      "scope": "file",
+      "modules": [
+        "operations"
+      ]
+    }
   ],
   "moduleOverrides": [
-    { "id": "REQ-001", "modules": ["reservations"] },
-    { "id": "REQ-002", "modules": ["reservations"] },
-    { "id": "REQ-003", "modules": ["access"] },
-    { "id": "REQ-004", "modules": ["messaging"] },
-    { "id": "REQ-005", "modules": ["operations"] },
-    { "id": "DD-002", "modules": ["access"] },
-    { "id": "DD-003", "modules": ["messaging"] },
-    { "id": "TASK-001", "modules": ["reservations"] },
-    { "id": "TASK-002", "modules": ["reservations"] },
-    { "id": "TASK-003", "modules": ["access"] },
-    { "id": "TASK-004", "modules": ["access"] },
-    { "id": "TASK-005", "modules": ["messaging"] },
-    { "id": "TASK-006", "modules": ["operations"] }
+    {
+      "id": "REQ-001",
+      "modules": [
+        "reservations"
+      ]
+    },
+    {
+      "id": "REQ-002",
+      "modules": [
+        "reservations"
+      ]
+    },
+    {
+      "id": "REQ-003",
+      "modules": [
+        "access"
+      ]
+    },
+    {
+      "id": "REQ-004",
+      "modules": [
+        "messaging"
+      ]
+    },
+    {
+      "id": "REQ-005",
+      "modules": [
+        "operations"
+      ]
+    },
+    {
+      "id": "DD-002",
+      "modules": [
+        "access"
+      ]
+    },
+    {
+      "id": "DD-003",
+      "modules": [
+        "messaging"
+      ]
+    },
+    {
+      "id": "TASK-001",
+      "modules": [
+        "reservations"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "modules": [
+        "reservations"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "modules": [
+        "access"
+      ]
+    },
+    {
+      "id": "TASK-004",
+      "modules": [
+        "access"
+      ]
+    },
+    {
+      "id": "TASK-005",
+      "modules": [
+        "messaging"
+      ]
+    },
+    {
+      "id": "TASK-006",
+      "modules": [
+        "operations"
+      ]
+    }
   ],
   "features": [
-    { "key": "booking", "name": "Reliable booking" },
-    { "key": "maintenance", "name": "Maintenance planning" }
+    {
+      "key": "booking",
+      "name": "Reliable booking"
+    },
+    {
+      "key": "maintenance",
+      "name": "Maintenance planning"
+    }
   ],
   "featureRules": [
-    { "key": "booking-design", "scope": "file", "path": "design/reservations.md", "features": ["booking"] },
-    { "key": "maintenance-design", "scope": "file", "path": "design/operations.md", "features": ["maintenance"] }
+    {
+      "key": "booking-design",
+      "path": "design/reservations.md",
+      "scope": "file",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "key": "maintenance-design",
+      "path": "design/operations.md",
+      "scope": "file",
+      "features": [
+        "maintenance"
+      ]
+    }
   ],
   "featureOverrides": [
-    { "id": "REQ-001", "features": ["booking"] },
-    { "id": "REQ-002", "features": ["booking"] },
-    { "id": "REQ-003", "features": ["booking"] },
-    { "id": "REQ-004", "features": ["booking"] },
-    { "id": "REQ-005", "features": ["maintenance"] },
-    { "id": "TASK-001", "features": ["booking"] },
-    { "id": "TASK-002", "features": ["booking"] },
-    { "id": "TASK-003", "features": ["booking"] },
-    { "id": "TASK-004", "features": ["booking"] },
-    { "id": "TASK-005", "features": ["booking"] },
-    { "id": "TASK-006", "features": ["maintenance"] }
+    {
+      "id": "REQ-001",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "REQ-002",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "REQ-003",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "REQ-004",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "REQ-005",
+      "features": [
+        "maintenance"
+      ]
+    },
+    {
+      "id": "TASK-001",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "TASK-002",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "TASK-003",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "TASK-004",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "TASK-005",
+      "features": [
+        "booking"
+      ]
+    },
+    {
+      "id": "TASK-006",
+      "features": [
+        "maintenance"
+      ]
+    }
   ],
   "statuses": [
-    { "name": "Approved", "colors": { "light": "#24715B", "dark": "#83D8B4" } },
-    { "name": "Accepted", "colors": { "light": "#24715B", "dark": "#83D8B4" } },
-    { "name": "In review", "colors": { "light": "#956619", "dark": "#E9C46A" } },
-    { "name": "Proposed", "colors": { "light": "#956619", "dark": "#E9C46A" } },
-    { "name": "Draft", "colors": { "light": "#746186", "dark": "#C5AFDF" } },
-    { "name": "In progress", "colors": { "light": "#4267B2", "dark": "#91B5F4" } },
-    { "name": "Ready", "colors": { "light": "#187D75", "dark": "#75C9B5" } },
-    { "name": "Planned", "colors": { "light": "#64748B", "dark": "#B0BED0" } }
+    {
+      "name": "Approved",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "Approved"
+        }
+      ],
+      "colors": {
+        "light": "#24715b",
+        "dark": "#83d8b4"
+      }
+    },
+    {
+      "name": "Accepted",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "Accepted"
+        }
+      ],
+      "colors": {
+        "light": "#24715b",
+        "dark": "#83d8b4"
+      }
+    },
+    {
+      "name": "In review",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "In review"
+        }
+      ],
+      "colors": {
+        "light": "#956619",
+        "dark": "#e9c46a"
+      }
+    },
+    {
+      "name": "Proposed",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "Proposed"
+        }
+      ],
+      "colors": {
+        "light": "#956619",
+        "dark": "#e9c46a"
+      }
+    },
+    {
+      "name": "Draft",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "Draft"
+        }
+      ],
+      "colors": {
+        "light": "#746186",
+        "dark": "#c5afdf"
+      }
+    },
+    {
+      "name": "In progress",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "In progress"
+        }
+      ],
+      "colors": {
+        "light": "#4267b2",
+        "dark": "#91b5f4"
+      }
+    },
+    {
+      "name": "Ready",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "Ready"
+        }
+      ],
+      "colors": {
+        "light": "#187d75",
+        "dark": "#75c9b5"
+      }
+    },
+    {
+      "name": "Planned",
+      "rules": [
+        {
+          "mode": "exact",
+          "value": "Planned"
+        }
+      ],
+      "colors": {
+        "light": "#64748b",
+        "dark": "#b0bed0"
+      }
+    }
   ]
 }

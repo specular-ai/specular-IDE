@@ -15,7 +15,8 @@ export interface StatusSites {
 export type StatusSite = keyof StatusSites;
 /** Sites whose values are read from a Markdown region's text. */
 export type TextStatusSite = Exclude<StatusSite, 'checkboxes'>;
-export const DEFAULT_CHECKBOX_MARKERS: Record<string, string> = { x: 'Done', X: 'Done', ' ': 'Open', '-': 'In progress' };
+/** Increment 105: `~` (Conductor) and `/` (Obsidian's task plugins) are in progress too; `>` varies between tools and is left out. */
+export const DEFAULT_CHECKBOX_MARKERS: Record<string, string> = { x: 'Done', X: 'Done', ' ': 'Open', '-': 'In progress', '~': 'In progress', '/': 'In progress' };
 export const DEFAULT_STATUS_SITES: StatusSites = {
   paragraphs: { enabled: true, mode: 'literal', label: 'Status:' },
   tables: { enabled: true, mode: 'full', column: 'Status' },

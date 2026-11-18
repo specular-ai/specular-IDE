@@ -63,6 +63,10 @@ test('persists recent projects across restarts, deduplicates canonical folders, 
   await symlink(first, alias, process.platform === 'win32' ? 'junction' : 'dir');
   await choose(alias); await expect(page.locator('#project-heading')).toHaveAttribute('title', first);
   expect((await history()).map((entry: any) => entry.path)).toEqual([first, second]);
+  // Open project starts in the folder that contains the most recent project.
+  await application.evaluate(({ dialog }) => { dialog.showOpenDialog = (async (...args: any[]) => { (globalThis as any).openOptions = args.at(-1); return { canceled: true, filePaths: [] }; }) as any; });
+  await page.locator('#open-project').click();
+  await expect.poll(() => application.evaluate(() => (globalThis as any).openOptions?.defaultPath)).toBe(path.dirname(first));
   await stop(); await launch(true);
   await expect(page.locator('#project-heading')).toHaveAttribute('title', first);
   await page.locator('#show-recent').click();
@@ -72,7 +76,10 @@ test('persists recent projects across restarts, deduplicates canonical folders, 
   await page.screenshot({ path: 'test-results/recent-projects-welcome.png' });
   await cards.nth(1).click(); await expect(page.locator('#preview')).toContainText('Second project');
   await menuOpen(first); await expect(page.locator('#preview')).toContainText('First project');
-  await page.locator('#show-recent').click();
+  // The open-project chip in the header opens the same dialog; it is hidden in narrow windows.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1400, 900));
+  await expect(page.locator('#project-chip')).toContainText(path.basename(first));
+  await page.locator('#project-chip').click();
   await page.locator('#recent-projects-dialog').getByRole('button', { name: `Remove ${first} from recent projects`, exact: true }).click();
   await expect(page.locator('#recent-projects-dialog .recent-open')).toHaveCount(1);
   expect(await readFile(path.join(first, 'README.md'), 'utf8')).toContain('First project');
@@ -132,15 +139,18 @@ test('malformed settings do not block startup and are backed up before recent hi
 });
 
 
-test('source visibility resets on project switches and app restarts', async () => {
+test('source visibility is kept across project switches and app restarts (increment 98a)', async () => {
   await launch(); await choose(first);
   await page.locator('#toggle-source').click();
   await expect(page.locator('#source-panel')).toBeHidden();
   await choose(second);
-  await expect(page.locator('#source-panel')).toBeVisible();
-  await page.locator('#toggle-source').click();
   await expect(page.locator('#source-panel')).toBeHidden();
+  await expect(page.locator('#toggle-source')).toHaveText('Show source');
   await stop(); await launch(true);
+  await expect(page.locator('#source-panel')).toBeHidden();
+  await page.locator('#toggle-source').click();
+  await expect(page.locator('#source-panel')).toBeVisible();
+  await choose(first);
   await expect(page.locator('#source-panel')).toBeVisible();
   await expect(page.locator('#toggle-source')).toHaveText('Hide source');
 });

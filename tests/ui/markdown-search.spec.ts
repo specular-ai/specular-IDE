@@ -2,6 +2,7 @@ import { failAutosave } from './autosave-fixture';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { mkdir, mkdtemp, readFile, writeFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
+import { seedLegacyConfiguration } from './legacy-configuration';
 
 let app: ElectronApplication, page: Page, project: string, second: string;
 const nested = 'specifications/a-long-folder-name-for-readable-search-results/design.markdown';
@@ -23,6 +24,7 @@ test.beforeEach(async () => {
   await writeFile(path.join(project, 'node_modules/ignored.md'), 'needle');
   await writeFile(path.join(second, 'README.md'), '# Second project\n\nDifferent needle here.\n');
   const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key !== 'ELECTRON_RUN_AS_NODE' && value !== undefined)) as Record<string, string>;
+  await seedLegacyConfiguration(project);
   app = await electron.launch({ args: ['.', `--project=${project}`], env: { ...env, SPECULAR_USER_DATA: path.join(root, 'user-data') } });
   page = await app.firstWindow(); await failAutosave(app);
   await expect(page.locator('#document-path')).toHaveText('README.md');

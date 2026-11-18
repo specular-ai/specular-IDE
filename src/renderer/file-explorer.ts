@@ -1,7 +1,20 @@
 import type { Finding, ProjectFile, WorkspaceSnapshot } from '../shared/types';
+import { codeIcon, documentIcon, folderIcon } from './icons';
 
 interface TreeNode { path: string; name: string; file?: ProjectFile; children: TreeNode[] }
 const parentPath = (path: string) => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+/**
+ * Plain text matches anywhere in the path. With `*` or `?` the query is a wildcard pattern: `*` stays inside a folder,
+ * `**` crosses folders, `?` is one character. Without `/` it matches the name (`*.md`), with `/` the whole path (`specs/*.md`).
+ */
+export function pathFilter(query: string): (path: string) => boolean {
+  const lower = query.toLowerCase();
+  if (!/[*?]/.test(lower)) return path => path.toLowerCase().includes(lower);
+  const literal = (text: string) => text.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  const source = lower.split('**/').map(a => a.split('**').map(b => b.split('*').map(c => c.split('?').map(literal).join('[^/]')).join('[^/]*')).join('.*')).join('(?:.*/)?');
+  const pattern = new RegExp(`^${source}$`);
+  return lower.includes('/') ? path => pattern.test(path.toLowerCase()) : path => pattern.test(path.slice(path.lastIndexOf('/') + 1).toLowerCase());
+}
 
 export class FileExplorer {
   private expanded = new Set(['']);
@@ -28,9 +41,11 @@ export class FileExplorer {
     }
   }
 
-  render(workspace: WorkspaceSnapshot | undefined, findings: Finding[], current: string | undefined, query: string) {
+  /** `exclusion` (99a) names the excluded-path pattern that leaves a file out of analysis, if any. */
+  private exclusion: (path: string) => string | undefined = () => undefined;
+  render(workspace: WorkspaceSnapshot | undefined, findings: Finding[], current: string | undefined, query: string, exclusion: (path: string) => string | undefined = () => undefined) {
     const previousFolders = new Set(this.workspace?.folders ?? []);
-    this.workspace = workspace; this.findings = findings; this.current = current;
+    this.workspace = workspace; this.findings = findings; this.current = current; this.exclusion = exclusion;
     if (query !== this.query) {
       this.query = query;
       this.filteredExpanded = new Set(['', ...(workspace?.folders ?? [])]);
@@ -59,9 +74,10 @@ export class FileExplorer {
     for (const file of this.workspace.files) folder(parentPath(file.path)).children.push({
       path: file.path, name: file.path.split('/').pop()!, file, children: [],
     });
+    const matches = pathFilter(this.query);
     const filter = (node: TreeNode): boolean => {
       node.children = node.children.filter(filter).sort((a, b) => Number(!!a.file) - Number(!!b.file) || a.name.localeCompare(b.name));
-      return !this.query || node.path.toLowerCase().includes(this.query) || node.children.length > 0;
+      return !this.query || matches(node.path) || node.children.length > 0;
     };
     filter(root);
     const expanded = this.query ? this.filteredExpanded : this.expanded;
@@ -78,9 +94,13 @@ export class FileExplorer {
       const disclosure = document.createElement('span'); disclosure.className = 'tree-disclosure'; disclosure.setAttribute('aria-hidden', 'true');
       disclosure.textContent = node.file ? '' : expanded.has(node.path) ? '▾' : '▸';
       const icon = document.createElement('span'); icon.className = `file-icon${node.file?.configuration ? ' config' : ''}`; icon.setAttribute('aria-hidden', 'true');
-      icon.textContent = !node.file ? '▱' : node.file.configuration ? '⚙' : node.file.markdown ? 'M↓' : '‹›';
+      if (node.file?.configuration) icon.textContent = '⚙';
+      else icon.innerHTML = !node.file ? folderIcon(expanded.has(node.path)) : node.file.markdown ? documentIcon() : codeIcon();
       const label = document.createElement('span'); label.className = 'file-label'; label.textContent = node.name;
       row.append(disclosure, icon, label);
+      // A folder is shown excluded when the patterns cover what lies below it.
+      const excludedBy = this.exclusion(node.file ? node.path : `${node.path}/excluded.md`);
+      if (node.path && excludedBy) { row.classList.add('excluded'); row.title = `${node.path} - excluded from analysis (${excludedBy})`; }
       if (node.file) {
         row.dataset.file = node.path;
         if (counts.has(node.path)) {

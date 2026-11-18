@@ -78,3 +78,19 @@ test('feature conflicts preserve all source cards, and counts update after expli
   const resolved = groupDefinitions(assignFeatures(base, { ...configuration, featureOverrides: [{ id: 'REQ-1', features: ['one', 'two'] }] }).definitions, 'feature');
   assert.deepEqual(resolved.map(g => [g.label, g.count, g.items.length]), [['One', 1, 2], ['Two', 1, 2]]);
 });
+
+test('file grouping labels relative paths, orders by path and source line, and keeps duplicates in each file', () => {
+  const index = buildIndex([
+    analyzeDocument('b/tasks.md', '# REQ-9 Late\n# REQ-2 Early\n'),
+    analyzeDocument('a/tasks.md', '# REQ-3 Duplicate\n# REQ-1 First\n'),
+    analyzeDocument('README.md', '# REQ-3 Duplicate\n'),
+  ]);
+  const groups = groupDefinitions(index.definitions, 'file');
+  assert.deepEqual(groups.map(g => [g.key, g.label, g.count]), [['value:a/tasks.md', 'a/tasks.md', 2], ['value:b/tasks.md', 'b/tasks.md', 2], ['value:README.md', 'README.md', 1]]);
+  assert.deepEqual(groups.map(g => g.items.map(d => d.id)), [['REQ-3', 'REQ-1'], ['REQ-9', 'REQ-2'], ['REQ-3']]);
+  assert.deepEqual(groupDefinitions(index.definitions.filter(d => d.id === 'REQ-3'), 'file').map(g => g.label), ['a/tasks.md', 'README.md']);
+  const [definition] = index.definitions.filter(d => d.file === 'README.md');
+  const scoped = groupDefinitions([{ ...definition, scope: 'one' }, { ...definition, scope: 'two' }, { ...definition, scope: 'two', offset: definition.offset + 1 }], 'file');
+  assert.deepEqual(scoped.map(g => [g.label, g.count, g.items.length]), [['README.md', 2, 3]]);
+  assert.deepEqual(groupDefinitions([], 'file'), []);
+});

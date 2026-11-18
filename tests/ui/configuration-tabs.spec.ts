@@ -10,11 +10,11 @@ const dialog = () => page.locator('#project-configuration-dialog');
 const tab = (name: string) => page.getByRole('tab', { name, exact: true });
 async function open() {
   await page.locator('#project-config-open').click();
-  await expect(tab('Discover IDs')).toHaveAttribute('aria-selected', 'true');
-  await expect(tab('Discover IDs')).toBeFocused();
+  await expect(tab('Discover')).toHaveAttribute('aria-selected', 'true');
+  await expect(tab('Discover')).toBeFocused();
   await expect(page.getByRole('tabpanel')).toHaveCount(1);
   await expandDiscoveryMethods(page);
-  await tab('Discover IDs').focus();
+  await tab('Discover').focus();
 }
 async function preview() {
   await page.locator('#config-preview').click();
@@ -38,12 +38,12 @@ test.afterEach(async ({}, info) => {
 
 test('tabs preserve discovery review, scope, and edits; only actual draft changes invalidate suggestions', async () => {
   await open();
-  await page.getByRole('button', { name: 'Discover by patterns', exact: true }).click();
+  await page.getByRole('button', { name: 'Run heuristic discovery', exact: true }).click();
   const suggestion = page.locator('#discovery-review > .config-entry').filter({ hasText: 'REF-01' });
   await suggestion.locator(':scope > summary').click();
   await suggestion.getByLabel('Category display name', { exact: true }).fill('Reviewed category');
   const review = await page.locator('#discovery-review').textContent();
-  for (const name of ['Categories', 'Definition and status sites', 'Application modules', 'Application features', 'Authored statuses', 'Dates', 'Discover IDs']) {
+  for (const name of ['Categories', 'Definition and status sites', 'Application modules', 'Application features', 'Authored statuses', 'Dates', 'Excluded paths', 'Discover']) {
     await tab(name).click(); await expect(page.getByRole('tabpanel')).toHaveCount(1);
   }
   await expect(page.locator('#discovery-review')).toHaveText(review!);
@@ -52,18 +52,18 @@ test('tabs preserve discovery review, scope, and edits; only actual draft change
   await expect(page.getByRole('button', { name: 'Add suggestions to draft', exact: true })).toBeEnabled();
   await selectConfigurationTab(page, 'categories');
   await page.locator('.config-category').getByLabel('Name', { exact: true }).fill('Product requirements');
-  await tab('Discover IDs').click(); await expect(page.locator('#discovery-review')).toBeEmpty();
+  await tab('Discover').click(); await expect(page.locator('#discovery-review')).toBeEmpty();
   await expect(page.locator('#discovery-status')).toContainText('draft changed');
   await page.locator('#config-cancel').click(); await open();
   await selectConfigurationTab(page, 'categories');
   await expect(page.locator('.config-category').getByLabel('Name', { exact: true })).toHaveValue('Requirements');
 });
 
-test('shared preview applies inactive-tab edits and source resumption always selects Discover IDs', async () => {
+test('shared preview applies inactive-tab edits and source resumption always selects Discover', async () => {
   await open(); await selectConfigurationTab(page, 'categories');
   await page.locator('.config-category').getByLabel('Name', { exact: true }).fill('Product requirements');
   await selectConfigurationTab(page, 'modules'); await page.getByLabel('Module name', { exact: true }).fill('User interface');
-  await tab('Discover IDs').click(); await preview();
+  await tab('Discover').click(); await preview();
   const summary = await page.locator('#config-summary').textContent();
   // Opening status controls must not start a scan or silently alter a reviewed draft.
   for (const name of ['Authored statuses', 'Categories', 'Application modules', 'Definition and status sites']) {
@@ -74,7 +74,7 @@ test('shared preview applies inactive-tab edits and source resumption always sel
   await expect(dialog()).not.toBeVisible(); await open(); await expect(page.locator('#config-apply')).toBeEnabled();
   await selectConfigurationTab(page, 'categories'); await expect(page.getByLabel('Name', { exact: true })).toHaveValue('Product requirements');
   await selectConfigurationTab(page, 'modules'); await expect(page.getByLabel('Module name', { exact: true })).toHaveValue('User interface');
-  await tab('Discover IDs').click(); await page.locator('#config-apply').click(); await expect(dialog()).not.toBeVisible();
+  await tab('Discover').click(); await page.locator('#config-apply').click(); await expect(dialog()).not.toBeVisible();
   expect(JSON.parse(await readFile(path.join(project, '.specular/project.json'), 'utf8'))).toEqual({ ...configuration, categories: [{ key: 'req', name: 'Product requirements' }], modules: [{ key: 'gui', name: 'User interface' }] });
   expect(await readFile(path.join(project, 'a.md'), 'utf8')).toBe(source);
   await open(); await preview(); await tab('Application modules').click();
@@ -87,16 +87,16 @@ test('keyboard tabs, focus and shared actions fit the minimum window in both the
   for (const theme of ['dark', 'light']) {
     if (theme === 'light') await page.locator('#theme-switch').click();
     await open();
-    await page.keyboard.press('ArrowLeft'); await expect(tab('Dates')).toBeFocused();
-    await page.keyboard.press('ArrowRight'); await expect(tab('Discover IDs')).toBeFocused();
-    await page.keyboard.press('End'); await expect(tab('Dates')).toBeFocused();
-    await page.keyboard.press('Home'); await expect(tab('Discover IDs')).toBeFocused();
+    await page.keyboard.press('ArrowLeft'); await expect(tab('Excluded paths')).toBeFocused();
+    await page.keyboard.press('ArrowRight'); await expect(tab('Discover')).toBeFocused();
+    await page.keyboard.press('End'); await expect(tab('Excluded paths')).toBeFocused();
+    await page.keyboard.press('Home'); await expect(tab('Discover')).toBeFocused();
     await page.keyboard.press('ArrowRight'); await expect(tab('Categories')).toBeFocused();
     await expect(tab('Categories')).toHaveAttribute('aria-selected', 'true');
     await expect(page.locator('[role=tab][tabindex="0"]')).toHaveCount(1);
     await page.keyboard.press('Tab'); await expect(page.getByRole('tabpanel', { name: 'Categories', exact: true })).toBeFocused();
     await page.keyboard.press('Tab'); await expect(page.getByRole('button', { name: 'Add category', exact: true })).toBeFocused();
-    for (const name of ['Categories', 'Definition and status sites', 'Application modules', 'Application features', 'Authored statuses', 'Dates', 'Discover IDs']) {
+    for (const name of ['Categories', 'Definition and status sites', 'Application modules', 'Application features', 'Authored statuses', 'Dates', 'Excluded paths', 'Discover']) {
       await tab(name).click();
       for (const selector of ['#project-configuration-dialog', '.config-tabs', '#config-preview', '#config-apply']) {
         expect(await page.locator(selector).evaluate(element => { const r = element.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight; })).toBe(true);

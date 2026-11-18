@@ -3,12 +3,14 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { conversationFixture } from '../helpers/codex-runtime';
+import { seedLegacyConfiguration } from './legacy-configuration';
 let app: ElectronApplication, page: Page, fixture: Awaited<ReturnType<typeof conversationFixture>>, project: string;
 async function launch(options: Parameters<typeof conversationFixture>[1] = {}) {
   fixture = await conversationFixture(false, options); project = path.join(fixture.root, 'project'); await mkdir(project);
   await writeFile(path.join(project, 'requirements.md'), '# REQ-201\nPreserve this specification.\n');
   const env = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => value !== undefined && key !== 'ELECTRON_RUN_AS_NODE')) as Record<string, string>;
   const args = ['--project=' + project];
+  await seedLegacyConfiguration(project);
   app = await electron.launch({ ...(process.env.SPECULAR_TEST_PACKAGED ? { executablePath: path.resolve('out', `Specular-${process.platform}-${process.arch}`, 'Specular.exe'), args } : { args: ['.', ...args] }), env: { ...env, SPECULAR_USER_DATA: fixture.userData } });
   page = await app.firstWindow(); await failAutosave(app); await expect(page.locator('#workspace')).toBeVisible();
   await page.locator('[data-file="requirements.md"]').click();

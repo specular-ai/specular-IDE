@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "id": "spec-kit",
+  "tool": "Spec Kit",
+  "versions": "Spec Kit tasks-template with phases, prioritized user stories, and checkbox tasks (2025-2026)",
+  "description": "Tasks tagged by the Setup, Foundational, or Polish phase and by the priority of their user story, and defined by their checkbox items.",
+  "applies": { "any": [{ "folders": "**/.specify" }, { "all": [{ "files": "specs/*/spec.md" }, { "files": "specs/*/plan.md" }, { "files": "specs/*/tasks.md" }] }] },
+  "detectors": [
+    {
+      "id": "task-sections",
+      "kind": "heading-sections",
+      "files": ["**/tasks.md"],
+      "headings": [
+        { "name": "phases", "pattern": "^Phase \\d+: (?<phase>Setup|Foundational|Polish)\\b", "tag": "phase:{phase}", "describe": "{{count}} Setup, Foundational, or Polish phase headings (phase:setup, …)" },
+        { "name": "priorities", "pattern": "\\(Priority: (?<priority>P\\d)\\)", "tag": "priority:{priority}", "describe": "{{count}} user-story headings with a priority (priority:p1, …)" }
+      ],
+      "min": 3
+    }
+  ],
+  "proposals": [
+    {
+      "detector": "task-sections",
+      "join": "matching-ids",
+      "defaultDefinitionSites": {
+        "headings": { "enabled": true, "levels": [1, 2, 3, 4, 5, 6], "mode": "start" },
+        "tables": { "enabled": true, "column": "ID", "mode": "exact" },
+        "lists": { "enabled": true, "types": ["unordered", "ordered"], "mode": "start", "checkboxOnly": true },
+        "paragraphs": { "enabled": false, "mode": "start" }
+      },
+      "tagReason": [
+        { "text": "In {{files}} task lists, {{described}} divide these tasks, so the tasks under them are tagged by their section; tasks are defined by their checkbox items." }
+      ]
+    }
+  ]
+}

@@ -32,7 +32,7 @@ kbd { color: var(--muted); font: 10px Consolas, monospace; border: 1px solid var
 .relationship-map { flex: 1; min-height: 0; overflow: auto; padding: 18px; background: var(--surface-raised, #171d24); }
 .relationship-map h2 { margin: 0 0 8px; font-size: 20px; color: var(--text-accent, #def0ec); }
 .relationship-map h3 { font-size: 13px; margin: 16px 0 8px; }
-.map-intro, .map-scope, .map-through-scope, .map-status { font-size: 12px; line-height: 1.6; color: var(--text-muted, #a1b0bc); }
+.map-intro, .map-scope, .map-status { font-size: 12px; line-height: 1.6; color: var(--text-muted, #a1b0bc); }
 .map-controls { display: grid; grid-template-columns: auto minmax(100px, 1fr) auto; align-items: center; gap: 8px; margin: 16px 0; }
 .map-controls label { font-size: 11px; }
 .map-controls input, .map-controls select { min-width: 0; width: 100%; padding: 7px; color: var(--text-accent, #def0ec); background: var(--surface-base, #11161c); border: 1px solid var(--border-strong, #40505e); border-radius: 4px; }
@@ -47,11 +47,13 @@ kbd { color: var(--muted); font: 10px Consolas, monospace; border: 1px solid var
 .map-picker-notice { position: absolute; z-index: 11; top: 100%; left: 0; right: 0; padding: 8px; background: var(--surface-base, #11161c); color: var(--text-muted, #a1b0bc); pointer-events: none; }
 .map-id-picker:has(.map-picker-notice:not([hidden])) [role=listbox] { padding-top: 40px; }
 .map-navigation { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.map-headings { display: grid; grid-template-columns: 28% 28% 28%; column-gap: 8%; font-size: 12px; color: var(--text-muted, #a1b0bc); padding: 10px 0; }
+.map-headings { position: relative; height: 34px; font-size: 12px; color: var(--text-muted, #a1b0bc); }
+.map-headings > strong { position: absolute; top: 10px; width: 28%; }
 .map-graph { position: relative; margin: 8px 0; }
 .map-graph svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.map-edge { fill: none; stroke: var(--text-muted, #738d9b); stroke-width: 3; cursor: pointer; }
-.map-edge:hover, .map-graph g:focus .map-edge, .map-edge.selected { stroke: var(--text-accent, #83d8c5); outline: none; }
+/* 100a: with direct links, long curves cross shorter connections; only each connection's own hit area takes the pointer. */
+.map-edge { fill: none; stroke: var(--text-muted, #738d9b); stroke-width: 3; pointer-events: none; }
+.map-graph g:hover .map-edge, .map-graph g:focus .map-edge, .map-edge.selected { stroke: var(--text-accent, #83d8c5); outline: none; }
 .map-node { position: absolute; width: 28%; height: 84px; padding: 6px; display: flex; flex-direction: column; align-items: start; border: 1px solid var(--border-strong, #40505e); border-radius: 6px; background: var(--surface-raised, #1e2933); overflow: hidden; }
 .map-node.focused { border-color: var(--text-accent, #83d8c5); background: var(--surface-selected, #233b3d); }
 .map-definition { background: none; border: 0; padding: 0; color: var(--text-accent, #c4eee5); font-weight: 600; font-size: 12px; }

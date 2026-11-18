@@ -129,6 +129,16 @@ export function validateDefinitionPaths(value: unknown): string[] {
   if (new Set(value.map(item => item.toLowerCase())).size !== value.length) throw new Error('Definition paths must be unique.');
   return [...value];
 }
+/** Excluded paths (increment 99a): 1-64 patterns in the definition-path syntax, removed from analysis but still browsable. */
+export function validateExcludedPaths(value: unknown): string[] {
+  if (!Array.isArray(value) || !value.length || value.length > 64 || value.some(item => typeof item !== 'string')) throw new Error('excludedPaths needs 1-64 project-relative patterns such as .specify/templates.');
+  for (const pattern of value) {
+    try { compileScope({ pattern }, 0, true); }
+    catch { throw new Error(`Excluded path "${pattern}" is invalid. Use project-relative segments without captures, such as .specify/templates or docs/*/drafts; a folder covers everything below it.`); }
+  }
+  if (new Set(value.map(item => item.toLowerCase())).size !== value.length) throw new Error('Excluded paths must be unique.');
+  return [...value];
+}
 const compiledPaths = new WeakMap<readonly string[], RegExp[]>();
 export function pathsContain(file: string, paths: readonly string[]) {
   let value = compiledPaths.get(paths);

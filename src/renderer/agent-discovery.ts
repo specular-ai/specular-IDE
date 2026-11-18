@@ -1,12 +1,15 @@
-import { categoryChange, datesChanged, sitesChanged, stageAgentProposal, statusesChanged, type ProposalChange } from '../core/agent-proposal';
-import type { AgentGap, AgentProposal, DateMetrics, StatusMetrics } from '../core/agent-tools';
+import { categoryChange, datesChanged, foldersChanged, proposedGenerators, proposedSectionTags, sitesChanged, stageAgentProposal, statusesChanged, type ProposalChange } from '../core/agent-proposal';
+import type { AgentGap, AgentProposal, DateMetrics, FolderMetrics, SectionTagMetrics, StatusMetrics } from '../core/agent-tools';
+import type { FolderGenerator } from '../core/folder-generators';
+import { updateFolderTargets } from './folder-generators';
 import { DEFAULT_STATUS_SITES, type StatusSites } from '../core/status-sites';
 import { DEFAULT_DATE_SETTINGS, type DateSettings } from '../core/dates';
 import type { StatusPalette } from '../core/statuses';
-import type { IdCategory, IdConfiguration, IdRule } from '../core/id-configuration';
+import type { IdCategory, IdConfiguration, IdRule, SectionTag } from '../core/id-configuration';
 import type { IdDefinitionSites } from '../core/definition-sites';
 import type { ConfigurationContext } from './project-configuration';
-import { DEFAULT_RUN_LIMITS, MAX_RUN_LIMITS, MIN_TOOL_CALLS, runLimits, toolCallLimitError } from '../core/run-limits';
+import { DEFAULT_RUN_LIMITS, MAX_RUN_LIMITS, MIN_TOOL_CALLS, toolCallLimitError } from '../core/run-limits';
+import { explain } from './hover-hint';
 
 interface AgentDiscoveryHost {
   setupAgent(): void;
@@ -51,6 +54,23 @@ function dateMetricsText(metrics: DateMetrics) {
   const found = metrics.rules.filter(rule => rule.dates).map(rule => `${rule.key} ${rule.dates}`).join(', ');
   return `Dates found: ${found || 'none'}${metrics.emptyRules.length ? `. Enabled rules that find nothing: ${metrics.emptyRules.join(', ')}` : ''}${metrics.exclusions.length ? `. Exclusions: ${metrics.exclusions.map(e => `${e.path} (${e.files} files)`).join(', ')}` : ''}.`;
 }
+const generatorText = (rule: Pick<FolderGenerator, 'target' | 'pattern' | 'exclusions'>) => `${rule.target === 'features' ? 'Features' : 'Modules'} from ${rule.pattern}${rule.exclusions.length ? ` (excluding ${rule.exclusions.join(', ')})` : ''}`;
+export function generatorsText(rules: FolderGenerator[] | undefined) { return rules?.length ? rules.map(generatorText).join('; ') : 'none'; }
+/** Folder generator measurements for the review (96). */
+function folderMetricsText(metrics: FolderMetrics | undefined, rules: FolderGenerator[]) {
+  if (!metrics) return 'Not measured.';
+  if (metrics.error) return metrics.error;
+  const shown = metrics.generators.filter(item => rules.some(rule => rule.key === item.key)).map(item => `${item.pattern}: ${item.folders} folders, ${item.ids} IDs (${item.examples.map(example => `${example.folder.slice(example.folder.lastIndexOf('/') + 1)} ${example.ids}`).join(', ')}${item.folders > item.examples.length ? ', …' : ''})${item.issues.length ? `. ${item.issues.join(' ')}` : ''}`);
+  const outside = Object.entries(metrics.unassigned).map(([target, count]) => `${count} defined IDs outside every derived ${target === 'features' ? 'feature' : 'module'} folder`);
+  return [...shown, ...outside].join('. ') + '.';
+}
+/** Section tag entries and their measurements for the review (96h). */
+export const sectionTagsText = (entries: readonly SectionTag[]) => entries.map(entry => entry.pattern !== undefined ? `headings matching ${entry.pattern} as ${entry.tag}` : `"${entry.heading}" as ${entry.tag}`).join('; ');
+function tagMetricsText(metrics: SectionTagMetrics | undefined, key: string) {
+  const category = metrics?.categories.find(item => item.key === key);
+  if (!category) return 'Not measured.';
+  return `${category.tags.map(item => `${item.tag} ${item.ids}`).join(', ') || 'no tags'} · ${category.untagged} untagged${category.idleEntries.length ? ` · tagging nothing: ${category.idleEntries.join(', ')}` : ''}.`;
+}
 export const gapText = (gap: AgentGap) => `${gap.description}${gap.examples.length ? ` (${gap.examples.map(e => `${e.path}:${e.line}`).join(', ')})` : ''}`;
 function categoryText(category: IdCategory, proposal: IdConfiguration) {
   const name = (key?: string) => proposal.categories.find(c => c.key === key)?.name ?? key;
@@ -66,6 +86,7 @@ function categoryText(category: IdCategory, proposal: IdConfiguration) {
     category.deltas ? 'Records change deltas.' : '',
     category.nameReferences ? 'Backticked names refer to these elements.' : '',
     category.statusSites ? `Statuses from ${statusSitesText(category.statusSites)}.` : '',
+    category.sectionTags?.length ? `Section tags: ${sectionTagsText(category.sectionTags)}.` : '',
   ].filter(Boolean).join(' ');
 }
 
@@ -77,10 +98,10 @@ export class AgentDiscoveryPanel {
   private review = document.createElement('div');
   private model = document.createElement('input');
   private toolCalls = document.createElement('input');
-  private toolCallsHint = document.createElement('p');
+  private toolCallsHint = document.createElement('span');
   private agent = document.createElement('select');
-  private runButton = this.button('Run agent discovery', () => { void this.run(); }, 'button primary');
-  private cancelButton = this.button('Cancel run', () => this.cancel());
+  private runButton = this.button('Run agentic discovery', () => { void this.run(); }, 'button primary');
+  private cancelButton = this.button('Cancel discovery', () => this.cancel());
   private stageButton = this.button('Add selected to draft', () => this.stage(), 'button primary');
   private discardButton = this.button('Discard proposal', () => { this.clear(); this.status.textContent = 'Proposal discarded. No configuration was changed.'; });
   private requestId?: string;
@@ -90,11 +111,15 @@ export class AgentDiscoveryPanel {
   private includeSites = false;
   private includeStatuses = false;
   private includeDates = false;
+  private includeFolders = false;
+  /** Section tags for categories the draft already has (96h). */
+  private includeTags = false;
+  /** An Update running after Add selected to draft (96). */
+  private staging = false;
   constructor(private host: AgentDiscoveryHost) {
-    this.root.id = 'discovery-agent'; this.root.className = 'discovery-method'; this.root.open = true;
+    this.root.id = 'discovery-agent'; this.root.className = 'discovery-method';
     const summary = document.createElement('summary'); summary.textContent = 'Discover with an agent';
-    const help = document.createElement('p'); help.className = 'config-hint';
-    help.textContent = 'The agent explores all indexable Markdown in this project through Specular\'s read-only tools, tests draft configurations with the same analyzer as Preview, and proposes categories with their measured matches. It cannot read other files, run commands, use the network, or change the project. A run takes a few minutes and stops at its tool-call limit or time limit. Codex uses its connection from Agent setup; Claude Code uses the executable path from Agent setup, or PATH, and its own sign-in.';
+    const help = document.createElement('p'); help.className = 'config-hint'; help.textContent = 'Discover with an agent uses Codex or Claude Code through read-only tools. It explores all indexable Markdown in the project.';
     this.agent.setAttribute('aria-label', 'Agent'); this.agent.add(new Option('Codex', 'codex')); this.agent.add(new Option('Claude Code', 'claude'));
     const agentLabel = document.createElement('label'); agentLabel.textContent = 'Agent'; agentLabel.append(this.agent);
     this.model.id = 'agent-discovery-model'; this.model.setAttribute('aria-label', 'Agent model'); this.model.placeholder = 'Connected agent default'; this.model.maxLength = 128;
@@ -103,7 +128,8 @@ export class AgentDiscoveryPanel {
     Object.assign(this.toolCalls, { type: 'number', min: String(MIN_TOOL_CALLS), max: String(MAX_RUN_LIMITS.toolCalls), step: '1', value: String(DEFAULT_RUN_LIMITS.toolCalls), id: 'agent-discovery-tool-calls' });
     this.toolCalls.setAttribute('aria-label', 'Tool-call limit'); this.toolCalls.oninput = () => this.updateButtons();
     const toolCallsLabel = document.createElement('label'); toolCallsLabel.textContent = 'Tool-call limit'; toolCallsLabel.append(this.toolCalls);
-    this.toolCallsHint.id = 'agent-discovery-tool-calls-hint'; this.toolCallsHint.className = 'config-hint';
+    this.toolCallsHint.id = 'agent-discovery-tool-calls-hint'; this.toolCallsHint.className = 'agent-discovery-limit';
+    // Only an invalid tool-call limit is reported, on its own line below the description.
     this.runButton.id = 'run-agent-discovery'; this.cancelButton.id = 'cancel-agent-discovery'; this.stageButton.id = 'agent-discovery-stage';
     const actions = document.createElement('div'); actions.className = 'discovery-method-actions';
     actions.append(this.runButton, this.cancelButton, this.button('Agent setup', () => { this.cancel(); this.host.setupAgent(); }));
@@ -112,7 +138,8 @@ export class AgentDiscoveryPanel {
     this.review.id = 'agent-discovery-review';
     const body = document.createElement('div'); body.className = 'discovery-method-body';
     const fields = document.createElement('div'); fields.className = 'agent-discovery-fields'; fields.append(agentLabel, modelLabel, toolCallsLabel);
-    body.append(help, fields, this.toolCallsHint, actions, this.status, this.log, this.review);
+    explain(summary, help.textContent!);
+    body.append(fields, this.toolCallsHint, actions, this.status, this.log, this.review);
     this.root.append(summary, body);
     window.specular.onAgentDiscoveryProgress(value => {
       if (value.requestId !== this.requestId) return;
@@ -130,17 +157,17 @@ export class AgentDiscoveryPanel {
   private toolCallLimit() { const value = this.toolCalls.value.trim() === '' ? NaN : Number(this.toolCalls.value); return toolCallLimitError(value) ? undefined : value; }
   private updateButtons() {
     const running = !!this.requestId, limit = this.toolCallLimit();
-    this.toolCallsHint.textContent = limit === undefined ? toolCallLimitError(NaN)! : `A run stops after ${limit} tool calls or ${Math.round(runLimits(limit).wallMs / 60_000)} minutes. The agent is told its limit and warned near the end.`;
+    this.toolCallsHint.textContent = limit === undefined ? toolCallLimitError(NaN)! : '';
     this.toolCallsHint.classList.toggle('agent-discovery-limit-invalid', limit === undefined);
     this.runButton.disabled = running || limit === undefined || !this.host.context() || !!this.host.context()?.busy; this.cancelButton.disabled = !running; this.agent.disabled = this.model.disabled = this.toolCalls.disabled = running;
-    this.stageButton.disabled = !this.proposal || (!this.selected.size && !this.includeSites && !this.includeStatuses && !this.includeDates);
+    this.stageButton.disabled = !this.proposal || this.staging || (!this.selected.size && !this.includeSites && !this.includeStatuses && !this.includeDates && !this.includeFolders && !this.includeTags);
   }
   private snapshot() {
     const context = this.host.context();
     return context && { projectId: context.projectId, diskVersion: context.state.diskVersion, versions: JSON.stringify(context.documentVersions), draft: JSON.stringify(this.host.draft()) };
   }
   private fresh() { const now = this.snapshot(), before = this.baseline; return !!now && !!before && now.projectId === before.projectId && now.diskVersion === before.diskVersion && now.versions === before.versions && now.draft === before.draft; }
-  private clear() { this.proposal = undefined; this.baseline = undefined; this.selected.clear(); this.includeSites = this.includeStatuses = this.includeDates = false; this.review.replaceChildren(); this.updateButtons(); }
+  private clear() { this.proposal = undefined; this.baseline = undefined; this.selected.clear(); this.includeSites = this.includeStatuses = this.includeDates = this.includeFolders = this.includeTags = this.staging = false; this.review.replaceChildren(); this.updateButtons(); }
   private cancel() {
     const id = this.requestId; if (!id) return;
     this.requestId = undefined; void window.specular.cancelAgentDiscovery(id).catch(() => undefined);
@@ -164,6 +191,8 @@ export class AgentDiscoveryPanel {
       this.includeSites = sitesChanged(draft, result.proposal.configuration);
       this.includeStatuses = statusesChanged(draft, result.proposal.configuration);
       this.includeDates = datesChanged(draft, result.proposal.configuration);
+      this.includeFolders = foldersChanged(draft, result.proposal.configuration);
+      this.includeTags = proposedSectionTags(draft, result.proposal.configuration).some(item => item.existing);
       this.status.textContent = result.message;
       this.renderReview();
     } catch { if (this.requestId === id) { this.requestId = undefined; this.status.textContent = 'Discovery failed. Retry.'; } }
@@ -221,6 +250,25 @@ export class AgentDiscoveryPanel {
       ['agent-discovery-proposed', `Proposed date rules: ${dateSettingsText(configuration.dates)}.`],
       ['agent-discovery-counts', dateMetricsText(proposal.evaluation.dates)],
     ], proposal.dateRationale);
+    // Folder generators (96): new ones are added and Update derives their entries; existing ones stay.
+    if (foldersChanged(draft, configuration)) {
+      const added = proposedGenerators(draft, configuration);
+      part('folders', 'Features and modules', this.includeFolders, checked => { this.includeFolders = checked; }, [
+        ['agent-discovery-current', `Current folder patterns: ${generatorsText(draft.folderGenerators)}.`],
+        ['agent-discovery-proposed', `Added folder patterns: ${generatorsText(added)}. Adding them runs Update; existing features, modules, and patterns stay as they are.`],
+        ['agent-discovery-counts', folderMetricsText(proposal.evaluation.folders, added)],
+      ], proposal.folderRationale);
+    }
+    // Section tags (96h): measured per category; tags of categories the draft already has can be added without the category.
+    const tags = proposedSectionTags(draft, configuration);
+    if (tags.length) {
+      const name = (key: string) => configuration.categories.find(category => category.key === key)?.name ?? key, existing = tags.filter(item => item.existing);
+      part('tags', 'Section tags', this.includeTags, checked => { this.includeTags = checked; }, [
+        ...tags.map(item => ['agent-discovery-proposed', `${name(item.category)}${item.existing ? '' : ' (new category)'}: ${sectionTagsText(item.entries)}.`] as [string, string]),
+        ...tags.map(item => ['agent-discovery-counts', `${name(item.category)}: ${tagMetricsText(proposal.evaluation.tags, item.category)}`] as [string, string]),
+        ['config-hint', existing.length ? `Including them adds these entries to ${existing.map(item => name(item.category)).join(', ')}, even when the category itself is not selected; their existing entries stay. Tags of new categories come with the category.` : 'Tags of new categories come with the category.'],
+      ], proposal.tagRationale);
+    }
     if (proposal.gaps.length) {
       const item = document.createElement('section'); item.className = 'agent-discovery-gaps'; item.dataset.category = 'gaps';
       const heading = document.createElement('h4'); heading.textContent = 'Gaps (agent-generated, not applied)';
@@ -228,7 +276,8 @@ export class AgentDiscoveryPanel {
       const list = document.createElement('ul'); for (const gap of proposal.gaps) { const li = document.createElement('li'); li.textContent = gapText(gap); list.append(li); }
       const copy = this.button('Copy gaps', () => { void window.specular.copyBrief(proposal.gaps.map(gap => `- ${gapText(gap)}`).join('\n')).then(() => { this.status.textContent = 'Gaps copied.'; }, () => { this.status.textContent = 'Could not copy the gaps.'; }); });
       copy.id = 'agent-discovery-copy-gaps';
-      item.append(heading, note, list, copy); entries.push(item);
+      explain(heading, note.textContent!);
+      item.append(heading, list, copy); entries.push(item);
     }
     const actions = document.createElement('div'); actions.className = 'discovery-actions'; actions.append(this.stageButton, this.discardButton);
     entries.push(actions);
@@ -238,11 +287,24 @@ export class AgentDiscoveryPanel {
     if (!this.proposal) return;
     if (!this.fresh()) { this.clear(); this.status.textContent = 'Markdown, project, or configuration draft changed. Run discovery again. No configuration was changed.'; return; }
     try {
-      const draft = stageAgentProposal(this.host.draft(), this.proposal.configuration, this.selected, this.includeSites, { statuses: this.includeStatuses, dates: this.includeDates });
-      const count = this.selected.size;
-      const parts = [count ? `${count} ${count === 1 ? 'category' : 'categories'}` : '', this.includeSites ? 'the project-wide ID definition sites' : '', this.includeStatuses ? 'the statuses' : '', this.includeDates ? 'the date rules' : ''].filter(Boolean);
-      this.clear(); this.host.stage(draft);
-      this.status.textContent = `Added ${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]} to the draft. Preview matches, then Apply to save. Nothing has been saved yet.`;
+      const base = this.host.draft(), draft = stageAgentProposal(base, this.proposal.configuration, this.selected, this.includeSites, { statuses: this.includeStatuses, dates: this.includeDates, folders: this.includeFolders, tags: this.includeTags });
+      const count = this.selected.size, added = proposedGenerators(base, draft);
+      const parts = [count ? `${count} ${count === 1 ? 'category' : 'categories'}` : '', this.includeSites ? 'the project-wide ID definition sites' : '', this.includeStatuses ? 'the statuses' : '', this.includeDates ? 'the date rules' : '', added.length ? `${added.length} folder ${added.length === 1 ? 'pattern' : 'patterns'}` : '', this.includeTags ? 'the section tags' : ''].filter(Boolean);
+      const finish = (staged: IdConfiguration, extra = '') => {
+        this.clear(); this.host.stage(staged);
+        this.status.textContent = `Added ${parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]} to the draft${extra}. Preview matches, then Apply to save. Nothing has been saved yet.`;
+      };
+      if (!added.length) { finish(draft); return; }
+      // Increment 96: Update derives the entries of the added generators, as the Update button does.
+      const proposal = this.proposal, targets = [...new Set(added.map(rule => rule.target))];
+      this.staging = true; this.updateButtons(); this.status.textContent = 'Updating folder-derived features and modules…';
+      void updateFolderTargets(draft, targets, this.host.context()?.documents ?? {}).then(result => {
+        if (this.proposal !== proposal) return;
+        this.staging = false;
+        if (!this.fresh()) { this.clear(); this.status.textContent = 'Markdown, project, or configuration draft changed. Run discovery again. No configuration was changed.'; return; }
+        if (!result.configuration) { this.updateButtons(); this.status.textContent = `Cannot add the folder patterns: ${result.problems.join(' ')} Clear Features and modules, or resolve the collision in Application features or modules. No draft changes were made.`; return; }
+        finish(result.configuration, `, with ${result.entries} new ${result.entries === 1 ? 'entry' : 'entries'} from Update`);
+      });
     } catch (error) { this.status.textContent = error instanceof Error ? error.message : String(error); }
   }
   update() { if (this.proposal && !this.fresh()) { this.clear(); this.status.textContent = 'Markdown, project, or configuration draft changed. Run discovery again before using the proposal.'; } this.updateButtons(); }

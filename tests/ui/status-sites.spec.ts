@@ -2,6 +2,7 @@ import { test, expect, _electron as electron, type ElectronApplication, type Pag
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { failAutosave } from './autosave-fixture';
+import { seedLegacyConfiguration } from './legacy-configuration';
 let app: ElectronApplication, page: Page, root: string, project: string;
 const config = { version: 1, categories: [{ key: 'req', name: 'Requirements', role: 'requirement' }, { key: 'dd', name: 'Design', role: 'design' }],
   rules: [{ key: 'req', category: 'req', prefix: 'REQ' }, { key: 'dd', category: 'dd', prefix: 'DD' }],
@@ -15,7 +16,7 @@ async function launch() {
   await expect(page.locator('#project-heading')).toHaveText('project');
 }
 async function close() { await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(w => w.destroy())); await app.close(); }
-async function open() { await page.locator('#project-config-open').click(); await page.getByRole('tab', { name: 'Definition and status sites', exact: true }).click(); await expect(sites().getByLabel('Enable heading definitions')).toBeVisible(); }
+async function open() { await page.locator('#project-config-open').click(); await page.getByRole('tab', { name: 'Definition and status sites', exact: true }).click(); await expect(sites().getByLabel('ID definitions in headings')).toBeVisible(); }
 async function preview() { await page.locator('#config-preview').click(); await expect(page.locator('#config-status')).toContainText('Preview ready'); }
 async function apply() { await preview(); await page.locator('#config-apply').click(); await expect(page.locator('#project-configuration-dialog')).not.toBeVisible(); }
 async function saved() { return JSON.parse(await readFile(path.join(project, '.specular/project.json'), 'utf8')); }
@@ -32,7 +33,7 @@ async function configure() {
   await configureAnywhere();
   await statusSites().getByLabel('Paragraph field label', { exact: true }).fill('State:');
   await statusSites().getByLabel('Status column name', { exact: true }).fill('Progress');
-  await statusSites().getByLabel('Enable heading statuses').check();
+  await statusSites().getByLabel('Statuses in headings').check();
 }
 async function statusPreview() { await preview(); await page.locator('#config-filter').selectOption('statuses'); }
 
@@ -54,7 +55,7 @@ test('status sites preview raw/mapped values and source evidence, apply with mod
   const stored = await saved(); expect(stored.statusSites.paragraphs.label).toBe('State:'); expect(stored.statusSites.headings.enabled).toBe(true);
   await close(); await launch(); await expect(card('REQ-2').locator('.status-badge').first()).toHaveText('Ready'); await open();
   await expect(statusSites().getByLabel('Paragraph field label', { exact: true })).toHaveValue('State:');
-  await expect(statusSites().getByLabel('Enable heading statuses')).toBeChecked();
+  await expect(statusSites().getByLabel('Statuses in headings')).toBeChecked();
   expect(await readFile(path.join(project, 'a.md'), 'utf8')).toBe(source);
 });
 
@@ -67,7 +68,7 @@ test('category and individual-status overrides preview, persist, restart and res
   const categorySites = requirement.locator('.config-category-status-sites'); await categorySites.locator(':scope > summary').click();
   await categorySites.getByLabel('Category status sites', { exact: true }).selectOption('override');
   await categorySites.getByLabel('Paragraph field label', { exact: true }).fill('State:');
-  await expect(categorySites.getByLabel('Enable paragraph statuses')).toHaveCSS('width', '16px');
+  await expect(categorySites.getByLabel('Statuses in paragraphs')).toHaveCSS('width', '13px');
 
   await page.getByRole('tab', { name: 'Authored statuses', exact: true }).click();
   const ready = page.locator('#config-statuses .config-entry').filter({ has: page.locator(':scope > summary').filter({ hasText: 'Ready' }) });
@@ -96,18 +97,18 @@ test('category and individual-status overrides preview, persist, restart and res
 });
 test('disabled status sites persist separately from empty palettes; Cancel/defaults/rescan preserve ID settings', async () => {
   await open(); await configure(); await apply();
-  await open(); await statusSites().getByLabel('Enable heading statuses').uncheck(); await page.keyboard.press('Escape');
+  await open(); await statusSites().getByLabel('Statuses in headings').uncheck(); await page.keyboard.press('Escape');
   expect((await saved()).statusSites.headings.enabled).toBe(true);
   await open(); await page.getByRole('tab', { name: 'Authored statuses', exact: true }).click();
   await page.getByRole('button', { name: 'Delete all statuses', exact: true }).click(); await apply();
   expect((await saved()).statuses).toEqual([]); await expect(card('REQ-2').locator('.status-badge').first()).toHaveText('Status conflict');
   await open();
-  for (const kind of ['paragraph', 'table', 'heading']) await statusSites().getByLabel('Enable ' + kind + ' statuses').uncheck();
+  for (const kind of ['paragraph', 'table', 'heading']) await statusSites().getByLabel('Statuses in ' + kind + 's').uncheck();
   await statusPreview(); await expect(page.locator('#config-results')).toContainText('Previously:');
   await expect(page.locator('#config-results .status-badge')).toHaveCount(0); await page.locator('#config-apply').click();
   await expect(page.locator('#lens-results .status-badge')).toHaveCount(0);
   await close(); await launch(); await open();
-  for (const kind of ['paragraph', 'table', 'heading']) await expect(statusSites().getByLabel('Enable ' + kind + ' statuses')).not.toBeChecked();
+  for (const kind of ['paragraph', 'table', 'heading']) await expect(statusSites().getByLabel('Statuses in ' + kind + 's')).not.toBeChecked();
   await page.getByRole('tab', { name: 'Authored statuses', exact: true }).click();
   await page.getByRole('button', { name: 'Rescan statuses', exact: true }).click(); await expect(page.locator('#config-statuses')).toContainText('Found 0 authored status values; added 0.');
   expect((await saved()).statuses).toEqual([]);
@@ -165,14 +166,14 @@ test('status preview uses unsaved buffers, reports conflicts and preserves undo 
   await page.locator('#config-apply').click(); await expect(page.locator('#project-configuration-dialog')).not.toBeVisible();
   await expect(card('REQ-3').locator('.status-badge').first()).toHaveText('Status conflict'); expect(await readFile(path.join(project, 'a.md'), 'utf8')).toBe(source);
   await page.locator('#editor .cm-content').click(); await page.keyboard.press('Control+z'); await expect(card('REQ-3')).toHaveCount(0);
-  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-9 [Draft]\nStatus: Confirmed\n');
+  const other = path.join(root, 'other'); await mkdir(other); await writeFile(path.join(other, 'a.md'), '# REQ-9 [Draft]\nStatus: Confirmed\n'); await seedLegacyConfiguration(other);
   await app.evaluate(({ dialog }, folder) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [folder] }); }, other);
   await page.locator('#open-project').click(); await expect(page.locator('#project-heading')).toHaveText('other'); await expect(card('REQ-9').locator('.status-badge').first()).toHaveText('Confirmed');
 });
 
 test('status controls support keyboard, both themes and the minimum window size', async () => {
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1120, 720)); await open();
-  const enabled = statusSites().getByLabel('Enable heading statuses'); await enabled.focus(); await page.keyboard.press('Space'); await expect(enabled).toBeChecked();
+  const enabled = statusSites().getByLabel('Statuses in headings'); await enabled.focus(); await page.keyboard.press('Space'); await expect(enabled).toBeChecked();
   await statusSites().getByLabel('Heading status pattern', { exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: 'test-results/status-sites-dark.png' });
   expect(await page.locator('#project-configuration-dialog').evaluate(e => e.getBoundingClientRect().bottom <= innerHeight)).toBe(true);

@@ -1,7 +1,8 @@
 import { failAutosave, restoreAutosave } from './autosave-fixture';
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdir, mkdtemp, cp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, cp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { seedLegacyConfiguration } from './legacy-configuration';
 
 let application: ElectronApplication;
 let page: Page;
@@ -17,6 +18,7 @@ test.beforeEach(async () => {
   const environment: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined && key !== 'ELECTRON_RUN_AS_NODE') environment[key] = value;
   environment.SPECULAR_USER_DATA = path.join(directory, 'user-data');
+  await seedLegacyConfiguration(fixture);
   application = await electron.launch({ args: ['.', `--project=${fixture}`], cwd: process.cwd(), env: environment });
   page = await application.firstWindow();
   errors = [];
@@ -67,6 +69,38 @@ test('creates root Markdown, preserves unsaved tabs, and follows a new definitio
   expect(errors).toEqual([]);
 });
 
+test('creates Markdown in the active document folder or another existing folder, and rejects a removed folder', async () => {
+  await mkdir(path.join(fixture, 'specs', 'auth'), { recursive: true }); await mkdir(path.join(fixture, 'empty')); await mkdir(path.join(fixture, 'node_modules', 'pkg'), { recursive: true });
+  await writeFile(path.join(fixture, 'specs', 'auth', 'login.md'), '# Login\n');
+  await page.locator('#refresh').click();
+  await page.locator('#file-search').fill('login'); await page.locator('[data-file="specs/auth/login.md"]').click();
+  await expect(page.locator('#document-path')).toHaveText('specs/auth/login.md');
+  const dialog = page.locator('#new-file-dialog'), folder = page.getByLabel('Folder', { exact: true }), destination = page.locator('#new-file-destination');
+  await page.keyboard.press('Control+n'); await expect(dialog).toBeVisible();
+  await expect(folder).toHaveValue('specs/auth');
+  expect(await folder.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual(['', 'empty', 'specs', 'specs/auth', 'src']);
+  await expect(folder.locator('option').first()).toHaveText('Project root');
+  await expect(destination).toHaveText('Creates specs/auth/…');
+  await page.locator('#new-file-name').fill('session'); await expect(destination).toHaveText('Creates specs/auth/session.md');
+  await page.locator('#new-file-name').press('Enter');
+  await expect(page.locator('#document-path')).toHaveText('specs/auth/session.md');
+  await expect(page.locator('[data-file="specs/auth/session.md"]')).toBeVisible();
+  expect(await readFile(path.join(fixture, 'specs', 'auth', 'session.md'), 'utf8')).toBe('');
+  await page.keyboard.press('Control+n'); await expect(folder).toHaveValue('specs/auth');
+  await folder.selectOption(''); await page.locator('#new-file-name').fill('top.md'); await expect(destination).toHaveText('Creates top.md');
+  await page.locator('#new-file-create').click();
+  await expect(page.locator('#document-path')).toHaveText('top.md');
+  expect(await readFile(path.join(fixture, 'top.md'), 'utf8')).toBe('');
+  await page.keyboard.press('Control+n'); await expect(folder).toHaveValue('');
+  await folder.selectOption('empty'); await page.locator('#new-file-name').fill('gone');
+  await rm(path.join(fixture, 'empty'), { recursive: true });
+  await page.locator('#new-file-create').click();
+  await expect(page.locator('#new-file-error')).toContainText('“empty” no longer exists'); await expect(dialog).toBeVisible();
+  await page.locator('#new-file-cancel').click(); await expect(dialog).toBeHidden();
+  expect(await readdir(fixture)).not.toContain('gone.md');
+  expect(errors).toEqual([]);
+});
+
 test('validates creation names, refuses overwrites, handles failure and cancel, and works with no open tabs', async () => {
   let mainStderr = '';
   application.process().stderr!.on('data', chunk => { mainStderr += chunk.toString(); });
@@ -90,6 +124,7 @@ test('validates creation names, refuses overwrites, handles failure and cancel, 
     item.click();
   });
   await expect(dialog).toBeVisible();
+  await expect(page.getByLabel('Folder', { exact: true })).toHaveValue('');
   await page.locator('#new-file-cancel').click();
   await expect(dialog).toBeHidden();
   await page.locator('#new-file').click();
@@ -224,6 +259,8 @@ test('handles empty selections and clipboard failure while preserving unsaved so
   const original = await readFile(path.join(fixture, 'README.md'), 'utf8');
   await page.locator('.cm-content').click(); await page.keyboard.press('Control+End');
   await page.keyboard.insertText('\n\nREQ-200 must preserve edits.');
+  // Prepare agent brief waits for the index to include the edit; until then it only shows a notice.
+  await expect(page.locator('#status')).toContainText('Index up to date · includes unsaved edits');
   await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
   await page.locator('#prepare-brief').click();
   await expect(page.locator('#brief-state')).toHaveText('Unsaved editor snapshot');

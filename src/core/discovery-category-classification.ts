@@ -4,7 +4,9 @@ import type { ConventionSuggestion } from './id-discovery';
 export type DiscoveryCategoryDecision =
   | { kind: 'existing'; category: string; reason: 'equivalent-rule' }
   | { kind: 'new'; reason: 'unrecognized-convention' | 'shared-proposal-category' }
-  | { kind: 'ambiguous'; reason: 'display-name-collision' | 'partial-evidence-coverage' | 'multiple-existing-categories' | 'different-rule-for-existing-evidence' | 'equivalent-rule-evidence-mismatch' | 'proposal-category-collision' };
+  | { kind: 'ambiguous'; reason: 'display-name-collision' | 'partial-evidence-coverage' | 'multiple-existing-categories' | 'equivalent-rule-evidence-mismatch' | 'proposal-category-collision' }
+  /** Increment 96h: the one existing category that recognizes all the evidence. */
+  | { kind: 'ambiguous'; reason: 'different-rule-for-existing-evidence'; category: string };
 
 export interface DiscoveryCategoryEvidence {
   /** Existing draft category keys that recognize each evidence ID, computed in the bounded matcher. */
@@ -49,6 +51,8 @@ export function classifyDiscoveryCategory(
   const signature = suggestion.rule && canonicalRule(suggestion.rule);
   const equivalentOwners = new Set(signature === undefined ? [] : draft.rules.filter(rule => canonicalRule(rule) === signature).map(rule => rule.category));
   if (equivalentOwners.size > 1) return { kind: 'ambiguous', reason: 'multiple-existing-categories' };
+  // 96f: a templated rule's evidence (such as a bugfix criterion's text) is not an ID that rules match, so an identical rule is decisive.
+  if (equivalentOwners.size === 1 && suggestion.rule?.id !== undefined) return { kind: 'existing', category: [...equivalentOwners][0], reason: 'equivalent-rule' };
 
   const owners = evidence.owners.map(keys => new Set(keys));
   const recognized = owners.filter(keys => keys.size > 0);
@@ -61,7 +65,7 @@ export function classifyDiscoveryCategory(
     return { kind: 'ambiguous', reason: 'equivalent-rule-evidence-mismatch' };
   }
   if (recognized.length && recognized.length !== owners.length) return { kind: 'ambiguous', reason: 'partial-evidence-coverage' };
-  if (recognized.length) return { kind: 'ambiguous', reason: 'different-rule-for-existing-evidence' };
+  if (recognized.length) return { kind: 'ambiguous', reason: 'different-rule-for-existing-evidence', category: [...recognizedCategories][0] };
 
   const sameKey = proposal.filter(item => item.category.key === suggestion.category.key);
   const metadata = (item: ConventionSuggestion) => JSON.stringify({ name: item.category.name, role: item.category.role, colors: item.category.colors, idDefinitionSites: item.category.idDefinitionSites });
